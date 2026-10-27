@@ -3,7 +3,9 @@
   "name": "yt-niche-intelligence",
   "main": "worker/index.js",
   "compatibility_date": "2024-09-23",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS"
@@ -12,7 +14,20 @@
     {
       "binding": "DB",
       "database_name": "yt_niche_db",
-      "database_id": "00000000-0000-0000-0000-000000000001"
+      "database_id": "c206438a-75e3-450f-aaed-c8a1d5e693c6"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE_KV",
+      "id": "84e64a1e0d01485daf0194938e5934aa"
     }
   ]
+  // R2 bucket can be re-enabled once activated in Cloudflare Dashboard:
+  // "r2_buckets": [
+  //   {
+  //     "binding": "REPORTS_BUCKET",
+  //     "bucket_name": "yt-niche-reports"
+  //   }
+  // ]
 }

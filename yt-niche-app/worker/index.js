@@ -1,6 +1,14 @@
-// Cloudflare Worker for YouTube Niche & Competitor Intelligence
-// Powered by Cloudflare D1 + Assets
-// 100% Live Real-time YouTube Engine (with & without API Key)
+// Cloudflare Worker for TrendPulse.Tech
+// Backend Framework: Hono.js
+// Cloudflare Stack: Worker (Compute) + D1 (SQLite) + KV (Redis/Cache) + R2 (S3/Storage) + Assets (FE)
+
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+
+const app = new Hono();
+
+// Enable CORS for mobile app / web client API access
+app.use('/api/*', cors());
 
 const COUNTRY_PROFILES = {
   VN: { name: "Việt Nam", currency: "VND", rpmBase: 0.8, rpmHigh: 2.5, lang: "vi", gl: "VN" },
@@ -84,77 +92,44 @@ function parsePublishedText(str) {
   return 30;
 }
 
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-
-    // API Routing
-    if (url.pathname === "/api/analyze" && request.method === "POST") {
-      return handleAnalyze(request, env);
-    }
-    if (url.pathname === "/api/history" && request.method === "GET") {
-      return handleHistory(request, env);
-    }
-    if (url.pathname === "/api/export-csv" && request.method === "GET") {
-      return handleExportCSV(url, env);
-    }
-    if (url.pathname === "/api/export-strategy" && request.method === "GET") {
-      return handleExportStrategy(url, env);
-    }
-    if (url.pathname === "/api/countries" && request.method === "GET") {
-      return new Response(JSON.stringify(COUNTRY_PROFILES), {
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-
-    // Static Assets fallback (React Vite app)
-    if (env.ASSETS) {
-      return env.ASSETS.fetch(request);
-    }
-
-    return new Response("Not Found", { status: 404 });
-  }
-};
-
-async function handleAnalyze(request, env) {
+// ---------------------------------------------------------
+// 1. POST /api/analyze — Main Intelligence Engine
+// Integrates CF KV (Redis cache) + CF D1 (SQLite DB)
+// ---------------------------------------------------------
+app.post('/api/analyze', async (c) => {
   try {
-    const body = await request.json();
+    const body = await c.req.json();
     const keyword = (body.keyword || "").trim();
     const regionCode = (body.regionCode || "VN").toUpperCase();
     const customApiKey = (body.apiKey || "").trim();
-    const apiKey = customApiKey || env.YOUTUBE_API_KEY || "";
+    const apiKey = customApiKey || c.env.YOUTUBE_API_KEY || "";
 
     if (!keyword) {
-      return jsonError("Vui lòng nhập từ khóa hoặc tên ngách cần phân tích.", 400);
+      return c.json({ error: "Vui lòng nhập từ khóa hoặc tên ngách cần phân tích." }, 400);
     }
 
-    // Check D1 Cache first (only if valid live data exists)
-    const cacheKey = `search_v2:${keyword.toLowerCase()}:${regionCode}`;
-    if (env.DB) {
-      try {
-        const cached = await env.DB.prepare(
-          "SELECT payload FROM api_cache WHERE cache_key = ? AND expires_at > ?"
-        ).bind(cacheKey, Date.now()).first();
+    const cacheKey = `search_v3:${keyword.toLowerCase()}:${regionCode}`;
 
-        if (cached && cached.payload) {
-          const parsed = JSON.parse(cached.payload);
-          return new Response(JSON.stringify({ ...parsed, fromCache: true }), {
-            headers: { "Content-Type": "application/json" }
-          });
+    // STEP A: Check Cloudflare KV (NoSQL / Redis tier)
+    if (c.env.CACHE_KV) {
+      try {
+        const cached = await c.env.CACHE_KV.get(cacheKey, 'json');
+        if (cached) {
+          return c.json({ ...cached, fromCache: true, cacheSource: 'CF_KV' });
         }
-      } catch (err) {
-        console.warn("D1 cache read warning:", err.message);
+      } catch (kvErr) {
+        console.warn("KV Cache read error:", kvErr.message);
       }
     }
 
-    // Fetch REAL Live Data
+    // STEP B: Perform Live Analysis (YouTube Search / API)
     const result = await performNicheAnalysis(keyword, regionCode, apiKey);
 
-    // Save to D1
-    if (env.DB) {
+    // STEP C: Persist to Cloudflare D1 (SQLite relational tier)
+    if (c.env.DB) {
       try {
         const searchId = `niche_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        await env.DB.prepare(
+        await c.env.DB.prepare(
           `INSERT INTO niche_searches 
           (id, keyword, region_code, opportunity_score, demand_score, competition_score, monetization_score, breakout_score, verdict, data_json, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -173,7 +148,7 @@ async function handleAnalyze(request, env) {
         ).run();
 
         for (const video of result.competitors.slice(0, 20)) {
-          await env.DB.prepare(
+          await c.env.DB.prepare(
             `INSERT INTO competitor_videos 
             (id, search_id, video_id, title, channel_title, channel_id, published_at, view_count, subscriber_count, outlier_multiplier, vph, winning_pattern, thumbnail_url, video_url)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -194,26 +169,188 @@ async function handleAnalyze(request, env) {
             video.url
           ).run();
         }
-
-        // Cache 3 hours
-        await env.DB.prepare(
-          "INSERT OR REPLACE INTO api_cache (cache_key, payload, created_at, expires_at) VALUES (?, ?, ?, ?)"
-        ).bind(cacheKey, JSON.stringify(result), Date.now(), Date.now() + 3 * 3600 * 1000).run();
-
-      } catch (err) {
-        console.warn("D1 save warning:", err.message);
+      } catch (dbErr) {
+        console.warn("D1 save error:", dbErr.message);
       }
     }
 
-    return new Response(JSON.stringify(result), {
-      headers: { "Content-Type": "application/json" }
-    });
+    // STEP D: Save to Cloudflare KV (3-hour expiration like Redis)
+    if (c.env.CACHE_KV) {
+      try {
+        await c.env.CACHE_KV.put(cacheKey, JSON.stringify(result), {
+          expirationTtl: 3 * 3600
+        });
+      } catch (kvSaveErr) {
+        console.warn("KV Cache write error:", kvSaveErr.message);
+      }
+    }
 
+    return c.json(result);
   } catch (err) {
-    return jsonError(err.message || "Lỗi xử lý hệ thống", 500);
+    return c.json({ error: err.message || "Lỗi xử lý hệ thống" }, 500);
   }
-}
+});
 
+// ---------------------------------------------------------
+// 2. GET /api/history — Query logs from D1
+// ---------------------------------------------------------
+app.get('/api/history', async (c) => {
+  if (!c.env.DB) {
+    return c.json([]);
+  }
+  try {
+    const { results } = await c.env.DB.prepare(
+      "SELECT id, keyword, region_code, opportunity_score, verdict, created_at FROM niche_searches ORDER BY created_at DESC LIMIT 20"
+    ).all();
+    return c.json(results || []);
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+// ---------------------------------------------------------
+// 3. GET /api/export-csv — Cloudflare R2 (S3) Integration
+// ---------------------------------------------------------
+app.get('/api/export-csv', async (c) => {
+  const keyword = c.req.query("keyword") || "";
+  const regionCode = c.req.query("regionCode") || "VN";
+
+  if (!keyword) {
+    return c.text("Missing keyword", 400);
+  }
+
+  const analysis = await performNicheAnalysis(keyword, regionCode, c.env.YOUTUBE_API_KEY || "");
+  const videos = analysis.competitors;
+
+  const headers = ["Tiêu đề Video", "Kênh", "Lượt xem (Views)", "Lượng Sub Kênh", "Điểm Đột Biến (Outlier)", "Tốc độ xem (VPH)", "Công thức Thắng (Pattern)", "Ngày đăng", "Link Video"];
+  const rows = videos.map(v => [
+    `"${(v.title || '').replace(/"/g, '""')}"`,
+    `"${(v.channelTitle || '').replace(/"/g, '""')}"`,
+    v.views || 0,
+    v.subscribers || 0,
+    v.outlierMultiplier || 0,
+    v.vph || 0,
+    `"${(v.pattern?.pattern || '').replace(/"/g, '""')}"`,
+    v.publishedAt || '',
+    v.url || ''
+  ]);
+
+  const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(r => r.join(","))].join("\r\n");
+  const filename = `competitor_formula_${encodeURIComponent(keyword)}_${regionCode}.csv`;
+
+  // Backup file to Cloudflare R2 Bucket (S3 storage) if bound
+  if (c.env.REPORTS_BUCKET) {
+    try {
+      await c.env.REPORTS_BUCKET.put(`csv/${filename}`, csvContent, {
+        httpMetadata: { contentType: "text/csv; charset=utf-8" }
+      });
+    } catch (r2Err) {
+      console.warn("R2 Save Warning:", r2Err.message);
+    }
+  }
+
+  return new Response(csvContent, {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${filename}"`
+    }
+  });
+});
+
+// ---------------------------------------------------------
+// 4. GET /api/export-strategy — Cloudflare R2 (S3) Integration
+// ---------------------------------------------------------
+app.get('/api/export-strategy', async (c) => {
+  const keyword = c.req.query("keyword") || "";
+  const regionCode = c.req.query("regionCode") || "VN";
+
+  const analysis = await performNicheAnalysis(keyword, regionCode, c.env.YOUTUBE_API_KEY || "");
+  const filename = `strategy_report_${encodeURIComponent(keyword)}_${regionCode}.md`;
+
+  const md = `# BÁO CÁO PHÂN TÍCH CHIẾN LƯỢC NGÁCH YOUTUBE: "${analysis.keyword.toUpperCase()}"
+**Quốc gia mục tiêu:** ${analysis.countryName} (${analysis.regionCode})  
+**Hệ thống phân tích:** TrendPulse.Tech (Cloudflare Workers + Hono + D1 + KV + R2)  
+**Thời gian lập báo cáo:** ${new Date().toLocaleString("vi-VN")}  
+**Đánh giá tổng quan:** ${analysis.verdict.badge} — ${analysis.verdict.title}
+
+---
+
+## 1. BẢNG ĐIỂM CHỈ SỐ CƠ HỘI (OPPORTUNITY SCORECARD)
+
+| Chỉ số | Điểm số (0 - 100) | Đánh giá & Bối cảnh |
+|---|:---:|---|
+| **Điểm Cơ Hội Tổng Thể** | **${analysis.scores.opportunity}/100** | ${analysis.verdict.summary} |
+| **Nhu Cầu Khán Giả (Demand)** | **${analysis.scores.demand}/100** | Lượt xem trung bình top video: ${analysis.stats.averageViews.toLocaleString()} views. |
+| **Độ Cạnh Tranh (Competition)** | **${analysis.scores.competition}/100** | ${analysis.scores.competition > 70 ? 'Các kênh lớn chiếm ưu thế, cần khai thác góc ngách độc lạ.' : 'Cạnh tranh vừa phải, có nhiều khoảng trống cho kênh mới.'} |
+| **Cơ Hội Cho Kênh Nhỏ (Breakout)** | **${analysis.scores.breakout}/100** | Phát hiện ${analysis.stats.breakoutVideosCount} video outlier (view cao vượt trội so với lượng sub). |
+| **Tiềm Năng Kiếm Tiền (RPM)** | **${analysis.scores.monetization}/100** | Ngách: **${analysis.monetizationDetails.category}**. Ước tính RPM: ~${analysis.monetizationDetails.estimatedRPM}. |
+
+---
+
+## 2. KHOẢNG TRỐNG NỘI DUNG NÊN LÀM NGAY (CONTENT GAPS)
+
+${analysis.contentGaps.map((g, i) => `### ${i + 1}. ${g.topic}
+- **Mức độ ưu tiên:** ${g.potential}
+- **Lý do & Insight:** ${g.reason}
+`).join("\n")}
+
+---
+
+## 3. KHUNG GIỜ VÀNG ĐĂNG BÀI ĐƯỢC ĐỀ XUẤT
+${analysis.publishWindows.map(w => `- ${w}`).join("\n")}
+
+---
+
+## 4. TOP VIDEO ĐỐI THỦ CÓ CÔNG THỨC THẮNG TỐT NHẤT (SWIPE FILE)
+
+${analysis.competitors.slice(0, 10).map((v, i) => `### #${i + 1} [${v.title}](${v.url})
+- **Kênh:** ${v.channelTitle} (~${v.subscribers.toLocaleString()} subs)
+- **Lượt xem:** ${v.views.toLocaleString()} views | **Tốc độ:** ~${v.vph} views/giờ
+- **Điểm Đột Biến (Outlier Multiplier):** **${v.outlierMultiplier}x** (Lượt view gấp ${v.outlierMultiplier} lần lượng sub!)
+- **Công thức áp dụng:** ${v.pattern.pattern} — ${v.pattern.why}
+`).join("\n")}
+
+---
+*Báo cáo được trích xuất tự động từ Hệ sinh thái TrendPulse.Tech.*
+`;
+
+  // Backup to Cloudflare R2 (S3 Storage)
+  if (c.env.REPORTS_BUCKET) {
+    try {
+      await c.env.REPORTS_BUCKET.put(`reports/${filename}`, md, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" }
+      });
+    } catch (r2Err) {
+      console.warn("R2 Save Warning:", r2Err.message);
+    }
+  }
+
+  return new Response(md, {
+    headers: {
+      "Content-Type": "text/markdown; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${filename}"`
+    }
+  });
+});
+
+// ---------------------------------------------------------
+// 5. GET /api/countries — Country profiles endpoint
+// ---------------------------------------------------------
+app.get('/api/countries', (c) => c.json(COUNTRY_PROFILES));
+
+// ---------------------------------------------------------
+// Fallback Route: Serve Frontend (CF Worker Assets)
+// ---------------------------------------------------------
+app.get('*', async (c) => {
+  if (c.env.ASSETS) {
+    return c.env.ASSETS.fetch(c.req.raw);
+  }
+  return c.text('Not Found', 404);
+});
+
+// ---------------------------------------------------------
+// Internal YouTube Intelligence Analysis Logic
+// ---------------------------------------------------------
 async function performNicheAnalysis(keyword, regionCode, apiKey) {
   let videos = [];
   let dataSource = "LIVE_YOUTUBE_WEB";
@@ -222,28 +359,21 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
     try {
       videos = await fetchYouTubeDataViaAPI(keyword, regionCode, apiKey);
       dataSource = "LIVE_YOUTUBE_API";
-    } catch (apiErr) {
-      console.warn("YouTube API failed, fallback to Live Search Engine:", apiErr.message);
+    } catch {
       videos = await fetchLiveYouTubeSearch(keyword, regionCode);
     }
   } else {
-    // 100% Real Live YouTube search query without needing API Key
     videos = await fetchLiveYouTubeSearch(keyword, regionCode);
   }
 
   const country = COUNTRY_PROFILES[regionCode] || COUNTRY_PROFILES.VN;
   const domainInfo = detectDomainCPM(keyword);
 
-  // 1. Process Video Metrics & Outliers
-  const now = Date.now();
   const processedVideos = videos.map(v => {
     const ageHours = Math.max(v.ageDays * 24, 1);
     const vph = Math.round(v.views / ageHours);
-
-    // Outlier multiplier: views vs estimated subs
     const subsSafe = Math.max(v.subscribers || 1000, 500);
     const outlierMultiplier = parseFloat((v.views / subsSafe).toFixed(2));
-
     const pattern = detectWinningPattern(v.title);
 
     return {
@@ -255,40 +385,32 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
     };
   });
 
-  // Sort by Outlier Multiplier descending
   processedVideos.sort((a, b) => b.outlierMultiplier - a.outlierMultiplier);
 
-  // 2. Compute Core Scores (0 - 100 scale)
   const totalViews = processedVideos.reduce((acc, v) => acc + v.views, 0);
   const avgViews = Math.round(totalViews / (processedVideos.length || 1));
   const breakoutCount = processedVideos.filter(v => v.isBreakout).length;
   const smallChannelCount = processedVideos.filter(v => (v.subscribers || 0) < 50000).length;
 
-  // Demand Score: based on average and max views in top search
   const demandRaw = Math.min(100, Math.round((Math.log10(Math.max(avgViews, 500)) / 5.8) * 100));
   const demandScore = Math.max(25, Math.min(98, demandRaw));
 
-  // Competition Score: High if dominated by big established channels (>300k subs)
   const megaChannelRatio = processedVideos.filter(v => (v.subscribers || 0) > 300000).length / (processedVideos.length || 1);
   const competitionScore = Math.round(Math.min(95, Math.max(20, megaChannelRatio * 80 + (1 - (smallChannelCount / (processedVideos.length || 1))) * 35)));
   const lowSupplyScore = 100 - competitionScore;
 
-  // Breakout Score:
   const breakoutScore = Math.min(98, Math.max(15, Math.round((breakoutCount / (processedVideos.length || 1)) * 110 + (smallChannelCount / (processedVideos.length || 1)) * 40)));
 
-  // Monetization Score:
   const estimatedRpm = parseFloat((country.rpmBase * domainInfo.factor * 1.4).toFixed(2));
   const monetizationScore = Math.min(98, Math.max(20, Math.round((estimatedRpm / country.rpmHigh) * 90 + domainInfo.factor * 10)));
 
-  // Geomean Opportunity Score
   const geomProduct = demandScore * lowSupplyScore * monetizationScore * breakoutScore;
   const opportunityScore = Math.round(Math.pow(geomProduct, 0.25));
 
-  // 3. Strategic Verdict
   let verdict = {
     level: "HIGH",
     badge: "🚀 Cơ Hội Vàng (Rất Khả Thi)",
-    color: "#10b981",
+    color: "#00ff9c",
     title: "Ngách Đầy Tiềm Năng — Nên Triển Khai Sớm",
     summary: `Nhu cầu tìm kiếm ở mức cao (${demandScore}/100), trong khi các kênh nhỏ vẫn có cơ hội đạt hàng chục đến hàng trăm nghìn view. Kênh mới có tỷ lệ bứt phá cao nếu bám theo các chủ đề Outlier có sẵn.`
   };
@@ -297,7 +419,7 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
     verdict = {
       level: "LOW",
       badge: "⛔ Cạnh Tranh Khốc Liệt / Nhu Cầu Hẹp",
-      color: "#ef4444",
+      color: "#ff5454",
       title: "Khó Khăn Cho Kênh Mới — Cần Thu Hẹp Ngách",
       summary: `Ngách này bị áp đảo bởi các kênh thương hiệu lớn (Mức cạnh tranh ${competitionScore}/100) hoặc người xem không tìm kiếm thường xuyên. Bạn cần chọn một góc nhìn con cụ thể hơn.`
     };
@@ -305,13 +427,12 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
     verdict = {
       level: "MODERATE",
       badge: "⚖️ Khả Thi Có Điều Kiện",
-      color: "#f59e0b",
+      color: "#ffa926",
       title: "Cần Chọn Góc Nhìn Mới (Unique Angle)",
       summary: `Ngách có lượng khán giả ổn định nhưng đối thủ cũng khá nhiều. Bạn cần đầu tư vào thumbnail bắt mắt, tiêu đề dạng Cảnh báo/So sánh và kịch bản cuốn hút để cạnh tranh.`
     };
   }
 
-  // 4. Strategic Content Gaps
   const contentGaps = [
     { topic: `So sánh chi tiết & Top sai lầm thường gặp nhất về "${keyword}"`, potential: "Rất cao", reason: "Khán giả luôn tìm kiếm sự đảm bảo và câu trả lời khách quan trước khi bắt tay làm hoặc mua." },
     { topic: `Thực tế trải nghiệm 30 ngày: Kết quả thật về "${keyword}"`, potential: "Cao", reason: "Định dạng Challenge / Storytelling luôn giữ chân người xem tốt nhất (Average View Duration > 50%)." },
@@ -319,7 +440,6 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
     { topic: `Hướng dẫn toàn diện từ A-Z cho người mới bắt đầu: "${keyword}"`, potential: "Trung bình", reason: "Video trụ cột mang lại lượt view tìm kiếm đều đặn quanh năm (Evergreen Content)." }
   ];
 
-  // 5. Best Publishing Windows
   const publishWindows = regionCode === "VN" 
     ? ["11:30 - 13:00 (Khung giờ nghỉ trưa)", "19:30 - 21:30 (Giờ vàng giải trí buổi tối)", "09:00 - 11:00 Sáng Thứ Bảy & Chủ Nhật"]
     : ["16:00 - 18:00 EST", "11:00 - 13:00 EST (Thứ Năm đến Chủ Nhật)"];
@@ -356,7 +476,6 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
   };
 }
 
-// 100% Real Live YouTube Search Engine (Scrapes YouTube Public Endpoint directly)
 async function fetchLiveYouTubeSearch(keyword, regionCode) {
   const country = COUNTRY_PROFILES[regionCode] || COUNTRY_PROFILES.VN;
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&hl=${country.lang}&gl=${country.gl}`;
@@ -375,7 +494,7 @@ async function fetchLiveYouTubeSearch(keyword, regionCode) {
   const html = await res.text();
   const match = html.match(/ytInitialData\s*=\s*({.+?});<\/script>/);
   if (!match) {
-    throw new Error("Không thể trích xuất dữ liệu YouTube thời gian thực. Hãy thử lại sau vài giây.");
+    throw new Error("Không thể trích xuất dữ liệu YouTube thời gian thực.");
   }
 
   const initialData = JSON.parse(match[1]);
@@ -397,11 +516,10 @@ async function fetchLiveYouTubeSearch(keyword, regionCode) {
   walk(initialData);
 
   if (rawVideos.length === 0) {
-    throw new Error(`Không tìm thấy video nào cho từ khóa: "${keyword}" tại thị trường ${country.name}`);
+    throw new Error(`Không tìm thấy video nào cho từ khóa: "${keyword}"`);
   }
 
-  // Parse each video into structured object
-  const list = rawVideos.slice(0, 25).map(v => {
+  return rawVideos.slice(0, 25).map(v => {
     const vidId = v.videoId;
     const title = v.title?.runs?.[0]?.text || "";
     const channelTitle = v.ownerText?.runs?.[0]?.text || "YouTube Creator";
@@ -413,10 +531,8 @@ async function fetchLiveYouTubeSearch(keyword, regionCode) {
     const ageDays = parsePublishedText(pubRaw);
     const publishedAt = new Date(Date.now() - ageDays * 24 * 3600 * 1000).toISOString();
     
-    // Thumbnail resolution
     const thumbUrl = v.thumbnail?.thumbnails?.slice(-1)[0]?.url || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`;
 
-    // Smart subscriber estimation based on channel views and verified badges
     const isVerified = (v.ownerBadges || []).some(b => (b.metadataBadgeRenderer?.style || "").includes("VERIFIED"));
     let estimatedSubs = 15000;
     if (isVerified) {
@@ -445,17 +561,12 @@ async function fetchLiveYouTubeSearch(keyword, regionCode) {
       url: `https://www.youtube.com/watch?v=${vidId}`
     };
   });
-
-  return list;
 }
 
 async function fetchYouTubeDataViaAPI(keyword, regionCode, apiKey) {
   const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(keyword)}&type=video&maxResults=25&regionCode=${regionCode}&order=relevance&key=${apiKey}`;
   const res = await fetch(searchUrl);
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`YouTube API Error (${res.status}): ${errText}`);
-  }
+  if (!res.ok) throw new Error("API call failed");
   const data = await res.json();
   const items = data.items || [];
   if (items.length === 0) return [];
@@ -507,136 +618,4 @@ async function fetchYouTubeDataViaAPI(keyword, regionCode, apiKey) {
   });
 }
 
-async function handleHistory(request, env) {
-  if (!env.DB) {
-    return new Response(JSON.stringify([]), { headers: { "Content-Type": "application/json" } });
-  }
-  try {
-    const { results } = await env.DB.prepare(
-      "SELECT id, keyword, region_code, opportunity_score, verdict, created_at FROM niche_searches ORDER BY created_at DESC LIMIT 20"
-    ).all();
-    return new Response(JSON.stringify(results || []), {
-      headers: { "Content-Type": "application/json" }
-    });
-  } catch (err) {
-    return jsonError(err.message, 500);
-  }
-}
-
-async function handleExportCSV(url, env) {
-  const keyword = url.searchParams.get("keyword") || "";
-  const regionCode = url.searchParams.get("regionCode") || "VN";
-  
-  if (!keyword) {
-    return new Response("Missing keyword", { status: 400 });
-  }
-
-  let videos = [];
-  if (env.DB) {
-    const search = await env.DB.prepare(
-      "SELECT id FROM niche_searches WHERE keyword = ? AND region_code = ? ORDER BY created_at DESC LIMIT 1"
-    ).bind(keyword, regionCode).first();
-
-    if (search) {
-      const { results } = await env.DB.prepare(
-        "SELECT * FROM competitor_videos WHERE search_id = ? ORDER BY outlier_multiplier DESC"
-      ).bind(search.id).all();
-      videos = results || [];
-    }
-  }
-
-  if (videos.length === 0) {
-    const analysis = await performNicheAnalysis(keyword, regionCode, env.YOUTUBE_API_KEY || "");
-    videos = analysis.competitors;
-  }
-
-  const headers = ["Tiêu đề Video", "Kênh", "Lượt xem (Views)", "Lượng Sub Kênh", "Điểm Đột Biến (Outlier)", "Tốc độ xem (VPH)", "Công thức Thắng (Pattern)", "Ngày đăng", "Link Video"];
-  const rows = videos.map(v => [
-    `"${(v.title || '').replace(/"/g, '""')}"`,
-    `"${(v.channel_title || v.channelTitle || '').replace(/"/g, '""')}"`,
-    v.view_count || v.views || 0,
-    v.subscriber_count || v.subscribers || 0,
-    v.outlier_multiplier || v.outlierMultiplier || 0,
-    v.vph || 0,
-    `"${(v.winning_pattern || v.pattern?.pattern || '').replace(/"/g, '""')}"`,
-    v.published_at || v.publishedAt || '',
-    v.video_url || v.url || ''
-  ]);
-
-  const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(r => r.join(","))].join("\r\n");
-
-  return new Response(csvContent, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="competitor_formula_${encodeURIComponent(keyword)}_${regionCode}.csv"`
-    }
-  });
-}
-
-async function handleExportStrategy(url, env) {
-  const keyword = url.searchParams.get("keyword") || "";
-  const regionCode = url.searchParams.get("regionCode") || "VN";
-
-  const analysis = await performNicheAnalysis(keyword, regionCode, env.YOUTUBE_API_KEY || "");
-
-  const md = `# BÁO CÁO PHÂN TÍCH CHIẾN LƯỢC NGÁCH YOUTUBE: "${analysis.keyword.toUpperCase()}"
-**Quốc gia mục tiêu:** ${analysis.countryName} (${analysis.regionCode})  
-**Nguồn dữ liệu:** ${analysis.dataSource === 'LIVE_YOUTUBE_API' ? 'YouTube Data API v3' : 'YouTube Live Realtime Search'}  
-**Thời gian lập báo cáo:** ${new Date().toLocaleString("vi-VN")}  
-**Đánh giá tổng quan:** ${analysis.verdict.badge} — ${analysis.verdict.title}
-
----
-
-## 1. BẢNG ĐIỂM CHỈ SỐ CƠ HỘI (OPPORTUNITY SCORECARD)
-
-| Chỉ số | Điểm số (0 - 100) | Đánh giá & Bối cảnh |
-|---|:---:|---|
-| **Điểm Cơ Hội Tổng Thể** | **${analysis.scores.opportunity}/100** | ${analysis.verdict.summary} |
-| **Nhu Cầu Khán Giả (Demand)** | **${analysis.scores.demand}/100** | Lượt xem trung bình top video: ${analysis.stats.averageViews.toLocaleString()} views. |
-| **Độ Cạnh Tranh (Competition)** | **${analysis.scores.competition}/100** | ${analysis.scores.competition > 70 ? 'Các kênh lớn chiếm ưu thế, cần khai thác góc ngách độc lạ.' : 'Cạnh tranh vừa phải, có nhiều khoảng trống cho kênh mới.'} |
-| **Cơ Hội Cho Kênh Nhỏ (Breakout)** | **${analysis.scores.breakout}/100** | Phát hiện ${analysis.stats.breakoutVideosCount} video outlier (view cao vượt trội so với lượng sub). |
-| **Tiềm Năng Kiếm Tiền (RPM)** | **${analysis.scores.monetization}/100** | Ngách: **${analysis.monetizationDetails.category}**. Ước tính RPM: ~${analysis.monetizationDetails.estimatedRPM}. |
-
----
-
-## 2. KHOẢNG TRỐNG NỘI DUNG NÊN LÀM NGAY (CONTENT GAPS)
-
-${analysis.contentGaps.map((g, i) => `### ${i + 1}. ${g.topic}
-- **Mức độ ưu tiên:** ${g.potential}
-- **Lý do & Insight:** ${g.reason}
-`).join("\n")}
-
----
-
-## 3. KHUNG GIỜ VÀNG ĐĂNG BÀI ĐƯỢC ĐỀ XUẤT
-${analysis.publishWindows.map(w => `- ${w}`).join("\n")}
-
----
-
-## 4. TOP VIDEO ĐỐI THỦ CÓ CÔNG THỨC THẮNG TỐT NHẤT (SWIPE FILE)
-
-${analysis.competitors.slice(0, 10).map((v, i) => `### #${i + 1} [${v.title}](${v.url})
-- **Kênh:** ${v.channelTitle} (~${v.subscribers.toLocaleString()} subs)
-- **Lượt xem:** ${v.views.toLocaleString()} views | **Tốc độ:** ~${v.vph} views/giờ
-- **Điểm Đột Biến (Outlier Multiplier):** **${v.outlierMultiplier}x** (Lượt view gấp ${v.outlierMultiplier} lần lượng sub!)
-- **Công thức áp dụng:** ${v.pattern.pattern} — ${v.pattern.why}
-`).join("\n")}
-
----
-*Báo cáo được trích xuất tự động từ Hệ thống YouTube Niche & Competitor Intelligence (Cloudflare Workers & D1).*
-`;
-
-  return new Response(md, {
-    headers: {
-      "Content-Type": "text/markdown; charset=utf-8",
-      "Content-Disposition": `attachment; filename="strategy_report_${encodeURIComponent(keyword)}_${regionCode}.md"`
-    }
-  });
-}
-
-function jsonError(message, status = 400) {
-  return new Response(JSON.stringify({ error: message }), {
-    status,
-    headers: { "Content-Type": "application/json" }
-  });
-}
+export default app;
