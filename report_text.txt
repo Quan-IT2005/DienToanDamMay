@@ -1,0 +1,316 @@
+TOTAL PARAGRAPHS: 320
+P0: BÍ KÍP CODE WEB CHO NEWBIE VỚI AI
+P1: Reach.js – Node.js – Hono.js – Cloudflare Workers – D1 – KV – R2
+P2: Website: TrendFulse
+P3: 1. Phạm vi
+P4: Báo cáo trình bày trình tự xây dựng một website phân tích trending trên nền tảng youtube: chuẩn bị công cụ, tạo giao diện Frontend (Reach.js), xây dựng Backend (Node.js+Hono.js), tạo D1, KV, R2.
+P5: 2. Công nghệ và vai trò
+P7: Luồng dữ liệu: Người dùng mở giao diện FE → JavaScript gọi API HTTP → HonoJS xử lý → đọc/ghi D1, KV, R2 → trả JSON hoặc ảnh → giao diện cập nhật.
+P8: 3. Các bước thực hiện theo trình tự
+P9: Chuẩn bị công cụ
+P10: Thực hiện:
+P11: Tải Visual studio code
+P14: Tải Node.js
+P18: node -v
+P19: npm -v
+P22: Kết quả cần kiểm tra: Terminal hiển thị số phiên bản của cả hai công cụ.
+P23: Lưu ý: Nếu PowerShell chặn npm.ps1, sử dụng npm.cmd hoặc điều chỉnh chính sách PowerShell cho CurrentUser.
+P24: Tạo thư mục dự án
+P25: Thực hiện: Tạo một thư mục mới để chứa mã nguồn. Không sử dụng trực tiếp thư mục website đang chạy khi thực hành ví dụ.
+P26: mkdir D:\shop-demo-cloudflare
+P28: cd D:\shop-demo-cloudflare
+P30: Kết quả cần kiểm tra: Terminal đang ở thư mục shop-demo-cloudflare.
+P31: Khởi tạo dự án HonoJS
+P32: Thực hiện: Chạy bộ tạo dự án và chọn template Cloudflare Workers khi được hỏi. Cài thư viện và bổ sung Wrangler, TypeScript nếu dự án chưa có.
+P33: npm create hono@latest . Sau đón nhấn y
+P36: npm install
+P37: npm install -D wrangler typescript @cloudflare/workers-types
+P39: Kết quả cần kiểm tra: Có file package.json và thư mục src/.
+P40: Lưu ý: Các màn hình tùy chọn của trình khởi tạo có thể khác theo phiên bản.
+P41: Tạo cấu trúc FE và BE
+P42: Thực hiện: Tạo thư mục public/ (Frontend), src/ (Backend), migrations/ (SQL). Tạo các file public/index.html, public/style.css, public/app.js, src/index.ts, migrations/0001_init.sql.
+P45: Kết quả cần kiểm tra: Thư mục dự án có đủ các file trên.
+P46: Thực hiện Frontend (FE)
+P47: Viết HTML trang chủ
+P48: Thực hiện: Mở public/index.html. Tạo tiêu đề website, phần danh sách sản phẩm và liên kết tới style.css, app.js.
+P50: Kết quả cần kiểm tra: Mở trang web có tên shop, tiêu đề và vùng sản phẩm.
+P52: Ví dụ HTML tối thiểu:
+P53: <!doctype html><html lang="vi"><head><meta charset="utf-8">
+P54: <meta name="viewport" content="width=device-width, initial-scale=1">
+P55: <link rel="stylesheet" href="/style.css"><title>Nhóm 2 - Bá Khí</title></head>
+P56: <body><h1>Nhóm 2 - Bá Khí</h1><div id="products"></div>
+P57: <script src="/app.js"></script></body></html>
+P58: Viết CSS
+P59: Thực hiện: Mở file public/index.html trong VS Code. Trong phần <head>, sử dụng thẻ <style> để viết CSS, thiết lập font chữ, màu sắc chủ đạo, bố cục trang, thanh điều hướng, danh sách sản phẩm, giỏ hàng và giao diện tương thích trên điện thoại.
+P62: Kết quả cần kiểm tra: Trang web thay đổi màu, bố cục và hiển thị được trên điện thoại.
+P66: body { font-family: Arial, sans-serif; margin: 0; background: #f7f7f7; }
+P67: #products { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; padding: 24px; }
+P68: Gọi API sản phẩm từ JavaScript
+P69: Thực hiện: Mở public/app.js. Dùng fetch gọi /api/products; chuyển phản hồi thành JSON và hiển thị tên, giá sản phẩm bằng textContent (tránh chèn dữ liệu không tin cậy trực tiếp vào HTML).
+P71: Kết quả cần kiểm tra: Khi backend trả dữ liệu, các sản phẩm xuất hiện trên giao diện.
+P72: async function loadProducts() {
+P73: const res = await fetch("/api/products");
+P74: if (!res.ok) throw new Error("Không tải được sản phẩm");
+P75: const data = await res.json();
+P76: const root = document.querySelector("#products");
+P77: root.replaceChildren();
+P78: for (const p of data.products) {
+P79: const el = document.createElement("p");
+P80: el.textContent = `${p.name}: ${p.price} VNĐ`;
+P81: root.appendChild(el);
+P82: }
+P83: }
+P84: loadProducts();
+P85: Thực hiện cơ sở dữ liệu D1
+P86: Đăng nhập Cloudflare
+P87: Thực hiện: Tạo hoặc đăng nhập tài khoản Cloudflare trên dashboard; trong VS Code chạy lệnh đăng nhập Wrangler và cấp quyền trên trình duyệt. Có thể đăng nhập Cloudflare bằng GitHub.
+P88: npx wrangler login
+P92: npx wrangler whoami
+P94: Kết quả cần kiểm tra: Hiện thông tin tài khoản Cloudflare.
+P95: Tạo database D1
+P96: Thực hiện: Tạo D1 tên fashion_db; sao chép database_id được cung cấp và điền vào wrangler.toml.
+P97: npx wrangler d1 create fashion_db
+P99: Kết quả cần kiểm tra: Có database_id và cơ sở dữ liệu xuất hiện trong D1 Dashboard.
+P100: Lưu ý: Nếu fashion_db đã tồn tại, dùng D1 cũ thay vì tạo trùng; dùng đúng ID tài khoản.
+P101: Khai báo D1 trong wrangler.toml
+P102: Thực hiện: Tạo file wrangler.toml nếu chưa có; khai báo Worker, assets và D1. Ví dụ bên dưới dùng ID mẫu, phải thay bằng ID thật.
+P105: Kết quả cần kiểm tra: D1 binding có tên DB đúng như mã backend.
+P106: name = "nhom2-ba-khi-demo"
+P107: main = "src/index.ts"
+P108: compatibility_date = "2025-01-15"
+P109: [assets]
+P110: directory = "./public"
+P111: binding = "ASSETS"
+P112: run_worker_first = ["/api/*"]
+P113: [[d1_databases]]
+P114: binding = "DB"
+P115: database_name = "fashion_db"
+P116: database_id = "THAY_BANG_ID_D1_THAT"
+P117: migrations_dir = "migrations"
+P118: Tạo bảng bằng SQL
+P119: Thực hiện: Trong migrations/0001_init.sql viết SQL tạo bảng products và thêm vài dòng dữ liệu minh họa.
+P121: Kết quả cần kiểm tra: File SQL tồn tại và có cú pháp CREATE TABLE.
+P122: CREATE TABLE IF NOT EXISTS products (
+P123: id INTEGER PRIMARY KEY AUTOINCREMENT,
+P124: name TEXT NOT NULL,
+P125: price INTEGER NOT NULL,
+P126: stock INTEGER NOT NULL DEFAULT 0,
+P127: image_key TEXT
+P128: );
+P129: INSERT INTO products(name, price, stock) VALUES
+P130: ('Áo thun nam', 150000, 30),
+P131: ('Quần jean nam', 250000, 20);
+P132: Chạy migration local và đọc dữ liệu
+P133: Thực hiện: Áp dụng migration vào D1 local và chạy truy vấn để kiểm tra bảng.
+P134: npx wrangler d1 migrations apply fashion_db –local
+P137: npx wrangler d1 execute fashion_db --local --command "SELECT * FROM products;"
+P140: Kết quả cần kiểm tra: Terminal trả về dữ liệu sản phẩm.
+P141: Lưu ý: Chỉ dùng ví dụ khởi tạo này với database demo trống; không chèn dữ liệu mẫu vào database production đang bán hàng.
+P142: Thực hiện Backend (BE) với HonoJS
+P143: Viết API lấy sản phẩm
+P144: Thực hiện: Trong src/index.ts tạo Hono app, khai báo biến môi trường DB, viết endpoint GET /api/products để truy vấn D1 và trả JSON.
+P146: Kết quả cần kiểm tra: Truy cập /api/products thấy dữ liệu JSON.
+P147: import { Hono } from "hono";
+P148: const app = new Hono<{ Bindings: { DB: D1Database } }>();
+P149: app.get("/api/health", c => c.json({ ok: true }));
+P150: app.get("/api/products", async c => {
+P151: const result = await c.env.DB.prepare(
+P152: "SELECT id, name, price, stock FROM products ORDER BY id DESC"
+P153: ).all();
+P154: return c.json({ products: result.results });
+P155: });
+P156: export default app;
+P157: Khi triển khai các tính năng thêm/sửa/xóa sản phẩm và đặt hàng, phải tạo các endpoint POST/PATCH/DELETE riêng. Backend cần kiểm tra dữ liệu, quyền Admin, giá và số lượng tồn kho; Frontend không được tự quyết định giá thanh toán.
+P158: Tích hợp Cloudflare KV
+P159: Tạo KV namespace
+P160: Thực hiện: Tạo namespace CACHE. Nếu thông báo đã tồn tại, lấy ID từ danh sách thay vì tạo mới.
+P161: npx wrangler kv namespace create CACHE
+P162: npx wrangler kv namespace list
+P164: Kết quả cần kiểm tra: Có namespace CACHE và một ID dài.
+P165: Khai báo và dùng KV
+P166: Thực hiện: Thêm binding CACHE vào wrangler.toml. Trong Backend có thể cache danh sách sản phẩm theo key và thời hạn sống.
+P168: Kết quả cần kiểm tra: Backend đọc/ghi KV được khi chạy local hoặc remote.
+P169: [[kv_namespaces]]
+P170: binding = "CACHE"
+P171: id = "THAY_BANG_ID_KV_THAT"
+P173: // Ví dụ dùng trong route có env.CACHE:
+P174: const cached = await c.env.CACHE.get("products:list:v1", "json");
+P175: await c.env.CACHE.put("products:list:v1", JSON.stringify(data),
+P176: { expirationTtl: 60 });
+P177: Sau khi Admin sửa sản phẩm, xóa hoặc cập nhật cache liên quan. KV có tính nhất quán cuối cùng nên không dùng làm nguồn dữ liệu chính cho tồn kho và các giao dịch quan trọng.
+P178: Tích hợp Cloudflare R2
+P179: Kích hoạt dịch vụ và tạo bucket R2
+P180: Thực hiện: Mở Cloudflare Dashboard → R2 Object Storage. Nếu được yêu cầu, kích hoạt dịch vụ và kiểm tra điều khoản thanh toán. Tạo bucket chứa ảnh bằng giao diện hoặc Terminal.
+P181: npx wrangler r2 bucket create nhom2-ba-khi-images
+P182: npx wrangler r2 bucket list
+P184: Kết quả cần kiểm tra: Danh sách hiển thị nhom2-ba-khi-images.
+P185: Lưu ý: Không cần bật public bucket: có thể dùng API backend trả ảnh từ binding R2.
+P186: Khai báo R2 và quy trình upload
+P187: Thực hiện: Trong wrangler.toml thêm binding IMAGES. Tạo endpoint Admin có xác thực để nhận file, kiểm tra kích thước/loại file, dùng IMAGES.put() lưu R2. Lưu object key vào D1.
+P190: Kết quả cần kiểm tra: Upload thành công: ảnh xuất hiện trong R2, sản phẩm chứa image_key.
+P191: [[r2_buckets]]
+P192: binding = "IMAGES"
+P193: bucket_name = "nhom2-ba-khi-images"
+P195: // Phần xử lý sau khi đã xác thực và kiểm tra ảnh:
+P196: const key = `products/${crypto.randomUUID()}.webp`;
+P197: await c.env.IMAGES.put(key, imageBytes, {
+P198: httpMetadata: { contentType: "image/webp" }
+P199: });
+P200: Đoạn trên minh họa thao tác lưu R2, không phải API upload đầy đủ. API thật phải xác thực người dùng, kiểm tra MIME/nội dung file và giới hạn kích thước; một endpoint GET riêng đọc ảnh từ R2 để hiển thị cho khách.
+P201: Chạy thử website trên localhost
+P202: Cài đặt script và secret local
+P203: Thực hiện: Trong package.json cần có script dev, deploy và typecheck. Tạo .dev.vars để chứa ADMIN_TOKEN dùng khi chạy local; thêm .dev.vars vào .gitignore.
+P204: npm run typecheck
+P205: npx wrangler d1 migrations apply fashion_db --local
+P208: npm run dev
+P210: Kết quả cần kiểm tra: Terminal hiển thị Ready on http://127.0.0.1:8787.
+P211: Lưu ý: Không đẩy ADMIN_TOKEN, .dev.vars hoặc file sao lưu lên GitHub.
+P212: Kiểm thử bằng trình duyệt
+P213: Thực hiện: Mở localhost:8787 và các API /api/health, /api/products; kiểm tra Frontend nhận dữ liệu. Sau khi viết thêm các chức năng nghiệp vụ, kiểm thử giỏ hàng, đặt hàng, Admin và upload ảnh.
+P214: Kết quả cần kiểm tra: Mỗi thao tác có phản hồi phù hợp; dữ liệu tạo mới xuất hiện trong D1/R2 local.
+P216: Đưa website lên Cloudflare
+P217: Kiểm tra cấu hình remote
+P218: Thực hiện: Kiểm tra wrangler.toml có đúng Worker name, D1 database_id, KV id, R2 bucket_name. Kiểm tra tài khoản Wrangler đã đăng nhập.
+P219: npx wrangler whoami
+P220: npx wrangler d1 list
+P221: npx wrangler kv namespace list
+P222: npx wrangler r2 bucket list
+P224: Kết quả cần kiểm tra: Tất cả tài nguyên xuất hiện trong tài khoản đang dùng.
+P225: Áp dụng migration lên D1 remote
+P226: Thực hiện: Sao lưu dữ liệu trước nếu website đã có sản phẩm/đơn hàng; đọc SQL migration để bảo đảm không DROP hoặc DELETE nhầm. Sau đó mới áp dụng remote.
+P227: npx wrangler d1 export fashion_db --remote --output backup-before-update.sql
+P228: npx wrangler d1 migrations apply fashion_db –remote
+P230: Kết quả cần kiểm tra: Migration báo thành công, bảng cũ vẫn có dữ liệu.
+P231: Lưu ý: Không thực hiện remote migration trước khi sao lưu và rà soát SQL đối với hệ thống đang hoạt động.
+P232: Đặt secret thật cho Cloudflare
+P233: Thực hiện: Dùng Wrangler để đưa ADMIN_TOKEN lên Worker. Giá trị secret cần dài, khó đoán, không đưa vào mã nguồn.
+P234: npx wrangler secret put ADMIN_TOKEN
+P235: npx wrangler secret list
+P237: Kết quả cần kiểm tra: Danh sách hiển thị ADMIN_TOKEN (không lộ giá trị).
+P238: Deploy lên Cloudflare Workers
+P239: Thực hiện: Trong thư mục dự án, chạy deploy. Wrangler tải assets và mã Worker lên Cloudflare; đọc URL được trả về.
+P240: npm run deploy
+P243: Kết quả cần kiểm tra: Xuất hiện Uploaded/Deployed và link dạng https://ten-worker.ten-subdomain.workers.dev.
+P244: Kiểm thử production
+P245: Thực hiện: Mở URL thật; kiểm tra giao diện, /api/health, /api/products, ảnh R2, Admin, đơn hàng; xác nhận D1 remote đúng số sản phẩm.
+P246: npx wrangler d1 execute fashion_db --remote --command "SELECT COUNT(*) AS total FROM products;"
+P249: Kết quả cần kiểm tra: Website truy cập được từ Internet và dữ liệu chính xác.
+P251: HƯỚNG DẪN CÀI ĐẶT MÔI TRƯỜNG
+P252: 1. Chuẩn bị trước khi cài đặt
+P253: Máy tính Windows có kết nối Internet, VS Code, tài khoản Cloudflare và Node.js (khuyến nghị phiên bản LTS tương thích với dự án).
+P254: Cài Node.js và npm
+P255: Vào https://nodejs.org/ → tải bản LTS → chạy trình cài đặt → chọn các thiết lập mặc định.
+P256: Đóng và mở lại VS Code. Chọn Terminal → New Terminal để mở PowerShell.
+P258: Lưu ý: Nếu PowerShell báo không cho chạy npm.ps1, có thể thử lệnh npm.cmd hoặc chuyển Terminal sang Command Prompt; không cần tắt bảo vệ toàn hệ thống.
+P259: Mở đúng dự án đã có
+P260: Dự án hiện tại của bạn đã có package.json, wrangler.toml, src/ và public/. Không cần khởi tạo dự án mới.
+P262: Lưu ý: Nếu thư mục dự án của bạn nằm ở ổ đĩa khác, sửa đường dẫn sau lệnh cd.
+P263: 2. Cài đặt Wrangler và đăng nhập Cloudflare
+P264: Wrangler là công cụ dòng lệnh dùng để chạy, cấu hình và triển khai Cloudflare Workers, đồng thời quản lý tài nguyên D1, KV và R2.
+P265: Cài Wrangler trong dự án
+P267: Đăng nhập tài khoản Cloudflare
+P268: Tạo tài khoản (nếu chưa có) tại https://dash.cloudflare.com/ và hoàn tất các yêu cầu kích hoạt tài khoản.
+P270: Khi chạy lệnh login, trình duyệt mở trang Cloudflare để bạn xác nhận quyền truy cập. Quay lại Terminal sau khi cấp quyền.
+P271: 3. Cài HonoJS cho Backend
+P272: HonoJS là framework JavaScript/TypeScript để tạo API cho Cloudflare Workers. Khác với D1/KV/R2, HonoJS là một thư viện được cài bằng npm.
+P273: Cài và kiểm tra thư viện Hono
+P275: Để kiểm tra ở mức tối thiểu, file src/index.ts dùng câu lệnh import { Hono } from "hono"; dự án của bạn đã có file này nên không cần tạo lại.
+P276: 4. Khởi tạo Cloudflare D1 (cơ sở dữ liệu SQL)
+P277: D1 là cơ sở dữ liệu SQL chạy trên nền tảng Cloudflare. Ta không tải bộ cài D1 về máy; ta tạo database từ Cloudflare qua Wrangler.
+P278: Tạo database D1
+P280: Wrangler trả về tên và database_id. Sao chép database_id vào phần [[d1_databases]] của wrangler.toml.
+P282: Kiểm tra D1 và áp dụng migration
+P284: Khi đã kiểm tra nội dung SQL và muốn tạo bảng trên D1 thật, chạy:
+P286: Lưu ý: Lệnh --local chỉ cập nhật cơ sở dữ liệu phát triển trên máy; --remote tác động đến D1 trên Cloudflare. Cần kiểm tra kỹ các file migrations trước khi áp dụng từ xa.
+P287: Nếu fashion_db đã tồn tại, chỉ sử dụng lệnh list để kiểm tra, KHÔNG tạo database thứ hai.
+P288: 5. Khởi tạo Cloudflare KV (key–value storage)
+P289: KV lưu dữ liệu theo cặp khóa – giá trị, phù hợp cho cache hoặc thông tin truy xuất nhanh. KV là tài nguyên của Cloudflare, không phải gói npm.
+P290: Tạo namespace KV
+P292: Ghi lại id của namespace được trả về và điền vào wrangler.toml:
+P294: Kiểm tra danh sách KV
+P296: Lưu ý: Nếu đã có CACHE, lấy id hiện có và dùng lại; tránh tạo namespace trùng lặp. Binding CACHE là tên mà mã nguồn Worker dùng để truy cập namespace.
+P297: 6. Khởi tạo Cloudflare R2 (lưu trữ ảnh/tệp)
+P298: R2 là dịch vụ lưu trữ đối tượng (object storage), dùng để lưu ảnh sản phẩm hoặc các tệp. Trong dự án, ảnh được tải lên từ trang quản trị và lưu vào R2.
+P299: Kích hoạt R2 trong Dashboard (nếu cần)
+P300: Đăng nhập Cloudflare Dashboard → chọn R2 Object Storage.
+P301: Nếu tài khoản yêu cầu kích hoạt dịch vụ hoặc bổ sung thông tin thanh toán, làm theo hướng dẫn hiển thị trước khi tạo bucket.
+P302: Bước 11. Tạo bucket R2
+P304: Cấu hình binding trong wrangler.toml:
+P307: Lưu ý: Một số tài khoản phải kích hoạt R2 hoặc thêm thông tin thanh toán. Không cần tạo lại bucket nếu đã tồn tại.
+P309: 7. Kết nối các tài nguyên vào Cloudflare Worker
+P310: Sau khi tạo dịch vụ, phải khai báo binding trong wrangler.toml. Giá trị ID bên dưới là chỗ trống minh họa; cần thay bằng ID do Cloudflare cấp cho chính tài khoản của bạn.
+P311: Kiểm tra nội dung chính của wrangler.toml
+P314: Tên binding phải đúng với những gì backend đang dùng: DB cho D1, CACHE cho KV và IMAGES cho R2.
+P315: Chạy thử và kiểm tra triển khai
+P317: Mở đường dẫn localhost mà Terminal in ra (thường là http://localhost:8787). Kiểm tra Worker và các đường dẫn API do dự án định nghĩa.
+P319: Lệnh deploy đưa Worker và tài nguyên tĩnh được cấu hình lên Cloudflare. Đây là bước kiểm tra kết quả cấu hình, không phải bước cài thêm phần mềm.
+
+--- TABLE 0 ---
+['Thành phần', 'Nhiệm vụ', 'Nơi thực hiện']
+['Reach.js', 'Giao diện', 'Thư mục public/']
+['TypeScript + HonoJS (BE)', 'Nhận API, kiểm tra dữ liệu, xử lý đơn hàng', 'Thư mục src/']
+['Cloudflare Workers', 'Chạy backend, phục vụ website', 'Cloudflare']
+['Cloudflare D1', 'Lưu thông tin sản phẩm, đơn hàng', 'CSDL SQL']
+['Cloudflare KV', 'Cache danh sách sản phẩm', 'Key-value']
+['Cloudflare R2', 'Lưu tệp ảnh sản phẩm', 'Object Storage']
+['Wrangler', 'Chạy local và triển khai Worker', 'Terminal VS Code']
+
+--- TABLE 1 ---
+['Nội dung kiểm thử', 'Cách kiểm tra', 'Kết quả mong đợi']
+['Trang chủ', 'Mở http://127.0.0.1:8787', 'HTML/CSS hiển thị']
+['API health', 'Mở /api/health', 'JSON ok = true']
+['API sản phẩm', 'Mở /api/products', 'Có danh sách sản phẩm']
+['D1', 'Truy vấn SELECT * FROM products', 'Có dòng dữ liệu']
+['R2', 'Upload ảnh qua API quản trị đã xây dựng', 'Có object ảnh']
+['Admin', 'Thử gọi API không có token', 'Bị từ chối']
+
+--- TABLE 2 ---
+['node -v npm -v']
+
+--- TABLE 3 ---
+['cd D:\\nhom-2-ba-khi-shop npm install']
+
+--- TABLE 4 ---
+['npm install -D wrangler npx wrangler --version']
+
+--- TABLE 5 ---
+['npx wrangler login npx wrangler whoami']
+
+--- TABLE 6 ---
+['npm install hono npm list hono']
+
+--- TABLE 7 ---
+['npx wrangler d1 create fashion_db']
+
+--- TABLE 8 ---
+['[[d1_databases]] binding = "DB" database_name = "fashion_db" database_id = "ID_D1_THUC_TE" migrations_dir = "migrations"']
+
+--- TABLE 9 ---
+['npx wrangler d1 list npx wrangler d1 migrations apply fashion_db --local']
+
+--- TABLE 10 ---
+['npx wrangler d1 migrations apply fashion_db --remote']
+
+--- TABLE 11 ---
+['npx wrangler kv namespace create CACHE']
+
+--- TABLE 12 ---
+['[[kv_namespaces]] binding = "CACHE" id = "ID_KV_THUC_TE"']
+
+--- TABLE 13 ---
+['npx wrangler kv namespace list']
+
+--- TABLE 14 ---
+['npx wrangler r2 bucket create nhom2-ba-khi-images npx wrangler r2 bucket list']
+
+--- TABLE 15 ---
+['[[r2_buckets]] binding = "IMAGES" bucket_name = "nhom2-ba-khi-images"']
+
+--- TABLE 16 ---
+['name = "nhom2-ba-khi-fashion" main = "src/index.ts" compatibility_date = "2025-01-15"  [assets] directory = "./public" binding = "ASSETS" run_worker_first = ["/api/*"]  [[d1_databases]] binding = "DB" database_name = "fashion_db" database_id = "ID_D1_THUC_TE" migrations_dir = "migrations"  [[kv_namespaces]] binding = "CACHE" id = "ID_KV_THUC_TE"  [[r2_buckets]] binding = "IMAGES" bucket_name = "nhom2-ba-khi-images"']
+
+--- TABLE 17 ---
+['npx wrangler dev']
+
+--- TABLE 18 ---
+['npx wrangler deploy']

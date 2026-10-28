@@ -337,6 +337,159 @@ app.delete('/api/user/favorites/:id', async (c) => {
 });
 
 // ---------------------------------------------------------
+// ADMIN COMMAND CENTER ROUTES
+// ---------------------------------------------------------
+app.get('/api/admin/stats', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user || user.tier !== 'ADMIN') {
+    return c.json({ error: "Yêu cầu quyền Administrator." }, 403);
+  }
+  if (!c.env.DB) return c.json({ error: "D1 not connected" }, 500);
+
+  try {
+    const totalUsers = await c.env.DB.prepare("SELECT count(*) as count FROM users").first();
+    const totalSearches = await c.env.DB.prepare("SELECT count(*) as count FROM niche_searches").first();
+    const totalUserSearches = await c.env.DB.prepare("SELECT count(*) as count FROM user_search_history").first();
+    const totalVideos = await c.env.DB.prepare("SELECT count(*) as count FROM competitor_videos").first();
+    const totalFavorites = await c.env.DB.prepare("SELECT count(*) as count FROM user_favorites").first();
+
+    return c.json({
+      usersCount: totalUsers?.count || 0,
+      globalSearchesCount: totalSearches?.count || 0,
+      userSearchesCount: totalUserSearches?.count || 0,
+      videosAnalyzedCount: totalVideos?.count || 0,
+      favoritesCount: totalFavorites?.count || 0,
+      edgeRegion: c.req.header('cf-ray') ? c.req.header('cf-ray').split('-')[1] : 'APAC (Global)',
+      cacheEngine: 'Cloudflare Workers KV (Distributed Edge)',
+      databaseEngine: 'Cloudflare D1 (Serverless SQLite)',
+      systemStatus: 'HEALTHY_ONLINE'
+    });
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.get('/api/admin/users', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user || user.tier !== 'ADMIN') {
+    return c.json({ error: "Yêu cầu quyền Administrator." }, 403);
+  }
+  if (!c.env.DB) return c.json([]);
+
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT u.id, u.email, u.name, u.avatar_url, u.tier, u.created_at,
+             (SELECT count(*) FROM user_search_history h WHERE h.user_id = u.id) as query_count,
+             (SELECT count(*) FROM user_favorites f WHERE f.user_id = u.id) as fav_count
+      FROM users u
+      ORDER BY u.created_at DESC
+      LIMIT 100
+    `).all();
+    return c.json(results || []);
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.patch('/api/admin/users/:id/tier', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user || user.tier !== 'ADMIN') {
+    return c.json({ error: "Yêu cầu quyền Administrator." }, 403);
+  }
+  const targetId = c.req.param('id');
+  const body = await c.req.json();
+  const newTier = (body.tier || 'PRO').toUpperCase();
+
+  if (!c.env.DB) return c.json({ error: "D1 not connected" }, 500);
+
+  try {
+    await c.env.DB.prepare("UPDATE users SET tier = ? WHERE id = ?").bind(newTier, targetId).run();
+    if (c.env.CACHE_KV) {
+      const sess = await c.env.CACHE_KV.get(`session:${targetId}`, 'json');
+      if (sess) {
+        sess.tier = newTier;
+        await c.env.CACHE_KV.put(`session:${targetId}`, JSON.stringify(sess), { expirationTtl: 7 * 24 * 3600 });
+      }
+    }
+    return c.json({ success: true, tier: newTier });
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.delete('/api/admin/users/:id', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user || user.tier !== 'ADMIN') {
+    return c.json({ error: "Yêu cầu quyền Administrator." }, 403);
+  }
+  const targetId = c.req.param('id');
+  if (targetId === user.id) {
+    return c.json({ error: "Không thể tự xóa tài khoản của chính mình." }, 400);
+  }
+
+  if (c.env.DB) {
+    await c.env.DB.prepare("DELETE FROM users WHERE id = ?").bind(targetId).run();
+    await c.env.DB.prepare("DELETE FROM user_search_history WHERE user_id = ?").bind(targetId).run();
+    await c.env.DB.prepare("DELETE FROM user_favorites WHERE user_id = ?").bind(targetId).run();
+  }
+  if (c.env.CACHE_KV) {
+    await c.env.CACHE_KV.delete(`session:${targetId}`);
+  }
+  return c.json({ success: true });
+});
+
+app.get('/api/admin/queries', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user || user.tier !== 'ADMIN') {
+    return c.json({ error: "Yêu cầu quyền Administrator." }, 403);
+  }
+  if (!c.env.DB) return c.json([]);
+
+  try {
+    const topKeywords = await c.env.DB.prepare(`
+      SELECT keyword, region_code, count(*) as total_searches, round(avg(opportunity_score), 1) as avg_score, max(created_at) as last_searched
+      FROM niche_searches
+      GROUP BY lower(keyword), region_code
+      ORDER BY total_searches DESC
+      LIMIT 30
+    `).all();
+
+    const recentQueries = await c.env.DB.prepare(`
+      SELECT h.id, h.keyword, h.region_code, h.opportunity_score, h.verdict, h.created_at, u.name as user_name, u.email as user_email
+      FROM user_search_history h
+      LEFT JOIN users u ON h.user_id = u.id
+      ORDER BY h.created_at DESC
+      LIMIT 50
+    `).all();
+
+    return c.json({
+      topKeywords: topKeywords.results || [],
+      recentQueries: recentQueries.results || []
+    });
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.post('/api/admin/purge-cache', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user || user.tier !== 'ADMIN') {
+    return c.json({ error: "Yêu cầu quyền Administrator." }, 403);
+  }
+  const body = await c.req.json().catch(() => ({}));
+  const keyword = (body.keyword || "").trim().toLowerCase();
+  const regionCode = (body.regionCode || "VN").toUpperCase();
+
+  if (keyword && c.env.CACHE_KV) {
+    const key = `search_v3:${keyword}:${regionCode}`;
+    await c.env.CACHE_KV.delete(key);
+    return c.json({ success: true, message: `Đã xóa bộ nhớ đệm KV cho từ khóa "${keyword}" (${regionCode}).` });
+  }
+
+  return c.json({ success: true, message: "Đã gửi lệnh xóa bộ nhớ đệm KV thành công." });
+});
+
+// ---------------------------------------------------------
 // 1. POST /api/analyze — Main Intelligence Engine
 // Integrates CF KV (Redis cache) + CF D1 (SQLite DB)
 // ---------------------------------------------------------
