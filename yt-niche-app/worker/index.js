@@ -93,6 +93,250 @@ function parsePublishedText(str) {
 }
 
 // ---------------------------------------------------------
+// AUTHENTICATION & USER HELPERS
+// ---------------------------------------------------------
+async function hashPassword(password) {
+  const enc = new TextEncoder();
+  const data = enc.encode(password + "_trendpulse_salt_2026");
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function getAuthenticatedUser(c) {
+  const authHeader = c.req.header('authorization') || c.req.header('x-auth-token') || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (!token) return null;
+
+  // 1. Try reading session from Cloudflare KV
+  if (c.env.CACHE_KV) {
+    try {
+      const sess = await c.env.CACHE_KV.get(`session:${token}`, 'json');
+      if (sess && sess.id) return sess;
+    } catch (e) {
+      console.warn("Session KV get error:", e.message);
+    }
+  }
+
+  // 2. Fallback: query D1 directly if token is userId
+  if (c.env.DB && token.startsWith('usr_')) {
+    try {
+      const user = await c.env.DB.prepare(
+        "SELECT id, email, name, avatar_url, tier FROM users WHERE id = ?"
+      ).bind(token).first();
+      if (user) {
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          avatarUrl: user.avatar_url,
+          tier: user.tier || 'PRO'
+        };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------
+// AUTH ROUTES (Register, Login, Me, Logout)
+// ---------------------------------------------------------
+app.post('/api/auth/register', async (c) => {
+  try {
+    const body = await c.req.json();
+    const email = (body.email || "").trim().toLowerCase();
+    const password = body.password || "";
+    const name = (body.name || "").trim();
+
+    if (!email || !password || !name) {
+      return c.json({ error: "Vui lòng nhập đầy đủ họ tên, email và mật khẩu." }, 400);
+    }
+    if (password.length < 6) {
+      return c.json({ error: "Mật khẩu phải chứa ít nhất 6 ký tự." }, 400);
+    }
+
+    if (!c.env.DB) {
+      return c.json({ error: "Cơ sở dữ liệu D1 chưa sẵn sàng." }, 500);
+    }
+
+    const existing = await c.env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
+    if (existing) {
+      return c.json({ error: "Email này đã được sử dụng. Vui lòng đăng nhập hoặc chọn email khác." }, 400);
+    }
+
+    const userId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const passHash = await hashPassword(password);
+    const now = Date.now();
+    const avatarUrl = `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`;
+
+    await c.env.DB.prepare(
+      `INSERT INTO users (id, email, password_hash, name, avatar_url, tier, created_at)
+       VALUES (?, ?, ?, ?, ?, 'PRO', ?)`
+    ).bind(userId, email, passHash, name, avatarUrl, now).run();
+
+    const token = crypto.randomUUID();
+    const userObj = { id: userId, email, name, avatarUrl, tier: 'PRO' };
+
+    if (c.env.CACHE_KV) {
+      await c.env.CACHE_KV.put(`session:${token}`, JSON.stringify(userObj), { expirationTtl: 7 * 24 * 3600 });
+      await c.env.CACHE_KV.put(`session:${userId}`, JSON.stringify(userObj), { expirationTtl: 7 * 24 * 3600 });
+    }
+
+    return c.json({ success: true, token, user: userObj });
+  } catch (err) {
+    return c.json({ error: err.message || "Lỗi xử lý đăng ký tài khoản" }, 500);
+  }
+});
+
+app.post('/api/auth/login', async (c) => {
+  try {
+    const body = await c.req.json();
+    const email = (body.email || "").trim().toLowerCase();
+    const password = body.password || "";
+
+    if (!email || !password) {
+      return c.json({ error: "Vui lòng nhập email và mật khẩu." }, 400);
+    }
+
+    if (!c.env.DB) {
+      return c.json({ error: "Cơ sở dữ liệu D1 chưa sẵn sàng." }, 500);
+    }
+
+    const passHash = await hashPassword(password);
+    const user = await c.env.DB.prepare(
+      "SELECT id, email, password_hash, name, avatar_url, tier FROM users WHERE email = ?"
+    ).bind(email).first();
+
+    if (!user || user.password_hash !== passHash) {
+      return c.json({ error: "Email hoặc mật khẩu không chính xác." }, 401);
+    }
+
+    const token = crypto.randomUUID();
+    const userObj = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      avatarUrl: user.avatar_url,
+      tier: user.tier || 'PRO'
+    };
+
+    if (c.env.CACHE_KV) {
+      await c.env.CACHE_KV.put(`session:${token}`, JSON.stringify(userObj), { expirationTtl: 7 * 24 * 3600 });
+      await c.env.CACHE_KV.put(`session:${user.id}`, JSON.stringify(userObj), { expirationTtl: 7 * 24 * 3600 });
+    }
+
+    return c.json({ success: true, token, user: userObj });
+  } catch (err) {
+    return c.json({ error: err.message || "Lỗi đăng nhập" }, 500);
+  }
+});
+
+app.get('/api/auth/me', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user) {
+    return c.json({ error: "Chưa đăng nhập hoặc phiên đã hết hạn." }, 401);
+  }
+  return c.json({ user });
+});
+
+app.post('/api/auth/logout', async (c) => {
+  const authHeader = c.req.header('authorization') || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (token && c.env.CACHE_KV) {
+    await c.env.CACHE_KV.delete(`session:${token}`);
+  }
+  return c.json({ success: true });
+});
+
+// ---------------------------------------------------------
+// USER HISTORY & FAVORITES ROUTES
+// ---------------------------------------------------------
+app.get('/api/user/history', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user) {
+    return c.json({ error: "Vui lòng đăng nhập để xem lịch sử tìm kiếm cá nhân." }, 401);
+  }
+  if (!c.env.DB) return c.json([]);
+
+  try {
+    const { results } = await c.env.DB.prepare(
+      "SELECT id, keyword, region_code, opportunity_score, verdict, data_json, created_at FROM user_search_history WHERE user_id = ? ORDER BY created_at DESC LIMIT 60"
+    ).bind(user.id).all();
+    return c.json(results || []);
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.delete('/api/user/history/:id', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+  const id = c.req.param('id');
+  if (c.env.DB) {
+    await c.env.DB.prepare("DELETE FROM user_search_history WHERE id = ? AND user_id = ?").bind(id, user.id).run();
+  }
+  return c.json({ success: true });
+});
+
+app.post('/api/user/favorites', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user) return c.json({ error: "Vui lòng đăng nhập để lưu ngách yêu thích." }, 401);
+  try {
+    const body = await c.req.json();
+    const { keyword, regionCode, opportunityScore, verdict, data, notes } = body;
+    if (!keyword) return c.json({ error: "Thiếu từ khóa" }, 400);
+
+    const favId = `fav_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    if (c.env.DB) {
+      await c.env.DB.prepare(
+        `INSERT INTO user_favorites 
+        (id, user_id, keyword, region_code, opportunity_score, verdict, data_json, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        favId,
+        user.id,
+        keyword,
+        regionCode || 'VN',
+        opportunityScore || 0,
+        verdict || '',
+        JSON.stringify(data || {}),
+        notes || '',
+        Date.now()
+      ).run();
+    }
+    return c.json({ success: true, id: favId });
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.get('/api/user/favorites', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+  if (!c.env.DB) return c.json([]);
+  try {
+    const { results } = await c.env.DB.prepare(
+      "SELECT id, keyword, region_code, opportunity_score, verdict, data_json, notes, created_at FROM user_favorites WHERE user_id = ? ORDER BY created_at DESC"
+    ).bind(user.id).all();
+    return c.json(results || []);
+  } catch (err) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.delete('/api/user/favorites/:id', async (c) => {
+  const user = await getAuthenticatedUser(c);
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+  const id = c.req.param('id');
+  if (c.env.DB) {
+    await c.env.DB.prepare("DELETE FROM user_favorites WHERE id = ? AND user_id = ?").bind(id, user.id).run();
+  }
+  return c.json({ success: true });
+});
+
+// ---------------------------------------------------------
 // 1. POST /api/analyze — Main Intelligence Engine
 // Integrates CF KV (Redis cache) + CF D1 (SQLite DB)
 // ---------------------------------------------------------
@@ -108,13 +352,40 @@ app.post('/api/analyze', async (c) => {
       return c.json({ error: "Vui lòng nhập từ khóa hoặc tên ngách cần phân tích." }, 400);
     }
 
+    const currentUser = await getAuthenticatedUser(c);
     const cacheKey = `search_v3:${keyword.toLowerCase()}:${regionCode}`;
+
+    // Helper to log user history
+    const logUserHistory = async (resData) => {
+      if (currentUser && c.env.DB) {
+        try {
+          const ushId = `ush_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+          await c.env.DB.prepare(
+            `INSERT INTO user_search_history 
+            (id, user_id, keyword, region_code, opportunity_score, verdict, data_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(
+            ushId,
+            currentUser.id,
+            keyword,
+            regionCode,
+            resData.scores?.opportunity || 0,
+            resData.verdict?.title || '',
+            JSON.stringify(resData),
+            Date.now()
+          ).run();
+        } catch (uErr) {
+          console.warn("User history log warning:", uErr.message);
+        }
+      }
+    };
 
     // STEP A: Check Cloudflare KV (NoSQL / Redis tier)
     if (c.env.CACHE_KV) {
       try {
         const cached = await c.env.CACHE_KV.get(cacheKey, 'json');
         if (cached) {
+          await logUserHistory(cached);
           return c.json({ ...cached, fromCache: true, cacheSource: 'CF_KV' });
         }
       } catch (kvErr) {
@@ -146,6 +417,9 @@ app.post('/api/analyze', async (c) => {
           JSON.stringify(result),
           Date.now()
         ).run();
+
+        // Also record to user's personalized search history
+        await logUserHistory(result);
 
         for (const video of result.competitors.slice(0, 20)) {
           await c.env.DB.prepare(
