@@ -530,7 +530,6 @@ export default function App() {
             <span className="brand-accent">TREND</span>PULSE
             <span className="brand-sub">.TECH</span>
           </div>
-          <span className="brand-badge">EDGE V3.2</span>
         </div>
 
         {/* Global Search Bar */}
