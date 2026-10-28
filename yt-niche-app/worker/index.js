@@ -686,7 +686,16 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
     badge: "🚀 Cơ Hội Vàng (Rất Khả Thi)",
     color: "#00ff9c",
     title: "Ngách Đầy Tiềm Năng — Nên Triển Khai Sớm",
-    summary: `Nhu cầu tìm kiếm ở mức cao (${demandScore}/100), trong khi các kênh nhỏ vẫn có cơ hội đạt hàng chục đến hàng trăm nghìn view. Kênh mới có tỷ lệ bứt phá cao nếu bám theo các chủ đề Outlier có sẵn.`
+    summary: `Nhu cầu tìm kiếm ở mức cao (${demandScore}/100), trong khi các kênh nhỏ vẫn có cơ hội đạt hàng chục đến hàng trăm nghìn view. Kênh mới có tỷ lệ bứt phá cao nếu bám theo các chủ đề Outlier có sẵn.`,
+    pros: [
+      `Lượng khán giả tìm kiếm chủ động cao (${demandScore}/100)`,
+      `Phát hiện ${breakoutCount} video của kênh nhỏ đạt view đột biến`,
+      `Khung giờ người xem hoạt động tích cực, dễ kéo đề xuất`
+    ],
+    cons: [
+      `Cần tối ưu thumbnail để cạnh tranh CTR với các video cũ`,
+      `Đòi hỏi chất lượng nội dung cuốn hút ở 30 giây đầu tiên`
+    ]
   };
 
   if (opportunityScore < 45) {
@@ -695,7 +704,15 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
       badge: "⛔ Cạnh Tranh Khốc Liệt / Nhu Cầu Hẹp",
       color: "#ff5454",
       title: "Khó Khăn Cho Kênh Mới — Cần Thu Hẹp Ngách",
-      summary: `Ngách này bị áp đảo bởi các kênh thương hiệu lớn (Mức cạnh tranh ${competitionScore}/100) hoặc người xem không tìm kiếm thường xuyên. Bạn cần chọn một góc nhìn con cụ thể hơn.`
+      summary: `Ngách này bị áp đảo bởi các kênh thương hiệu lớn (Mức cạnh tranh ${competitionScore}/100) hoặc người xem không tìm kiếm thường xuyên. Bạn cần chọn một góc nhìn con cụ thể hơn.`,
+      pros: [
+        `Doanh thu RPM ở mức trung bình khá`,
+        `Nếu tạo được nội dung thực sự khác biệt vẫn có lượng xem trung thành`
+      ],
+      cons: [
+        `Kênh lớn chiếm lĩnh các từ khóa đầu ngành`,
+        `Thời gian kéo đề xuất dài hơn bình thường`
+      ]
     };
   } else if (opportunityScore < 65) {
     verdict = {
@@ -703,7 +720,15 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
       badge: "⚖️ Khả Thi Có Điều Kiện",
       color: "#ffa926",
       title: "Cần Chọn Góc Nhìn Mới (Unique Angle)",
-      summary: `Ngách có lượng khán giả ổn định nhưng đối thủ cũng khá nhiều. Bạn cần đầu tư vào thumbnail bắt mắt, tiêu đề dạng Cảnh báo/So sánh và kịch bản cuốn hút để cạnh tranh.`
+      summary: `Ngách có lượng khán giả ổn định nhưng đối thủ cũng khá nhiều. Bạn cần đầu tư vào thumbnail bắt mắt, tiêu đề dạng Cảnh báo/So sánh và kịch bản cuốn hút để cạnh tranh.`,
+      pros: [
+        `Nhu cầu xem đều đặn quanh năm (Evergreen)`,
+        `Nhiều công thức thắng (Winning Patterns) đã được kiểm chứng`
+      ],
+      cons: [
+        `Không nên copy nguyên mẫu tiêu đề đối thủ, phải có góc nhìn riêng`,
+        `Mức độ cạnh tranh trung bình khá (${competitionScore}/100)`
+      ]
     };
   }
 
