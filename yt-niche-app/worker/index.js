@@ -896,6 +896,51 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
     ? ["11:30 - 13:00 (Khung giờ nghỉ trưa)", "19:30 - 21:30 (Giờ vàng giải trí buổi tối)", "09:00 - 11:00 Sáng Thứ Bảy & Chủ Nhật"]
     : ["16:00 - 18:00 EST", "11:00 - 13:00 EST (Thứ Năm đến Chủ Nhật)"];
 
+  // 1. Hashtags frequency aggregation
+  const hashtagCount = {};
+  for (const v of processedVideos) {
+    for (const tag of (v.hashtags || [])) {
+      hashtagCount[tag] = (hashtagCount[tag] || 0) + 1;
+    }
+  }
+  const topHashtags = Object.entries(hashtagCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 16)
+    .map(([tag, count]) => ({ tag, count }));
+
+  // 2. Core SEO Keywords aggregation
+  const allTexts = processedVideos.map(v => `${v.title} ${v.descriptionSnippet || ''}`);
+  const coreKeywords = extractKeywords(allTexts, keyword);
+
+  // 3. Shorts vs Long-Form Breakdown
+  const shortsList = processedVideos.filter(v => v.isShort);
+  const longList = processedVideos.filter(v => !v.isShort);
+  const shortsCount = shortsList.length;
+  const longCount = longList.length;
+  const avgShortsViews = shortsCount > 0 ? Math.round(shortsList.reduce((acc, v) => acc + v.views, 0) / shortsCount) : 0;
+  const avgLongViews = longCount > 0 ? Math.round(longList.reduce((acc, v) => acc + v.views, 0) / longCount) : 0;
+
+  let formatRecommendation = "Nên sản xuất kết hợp cả hai: làm Shorts để thu hút subscriber mới và làm Video Dài để xây dựng uy tín & tối ưu doanh thu quảng cáo.";
+  if (shortsCount > 0 && avgShortsViews > avgLongViews * 1.5) {
+    formatRecommendation = `🔥 Shorts đang chiếm ưu thế vượt trội trong ngách này (Lượt xem TB của Shorts gấp ${(avgShortsViews / (avgLongViews || 1)).toFixed(1)}x video dài). Khuyến nghị đẩy mạnh YouTube Shorts để tăng trưởng kênh thần tốc!`;
+  } else if (longCount > 0 && avgLongViews > avgShortsViews * 1.8) {
+    formatRecommendation = "📚 Video dài (Long-form) có sức nặng và giá trị giữ chân khán giả tốt hơn trong ngách này. Hãy tập trung vào kịch bản có chiều sâu > 8 phút.";
+  }
+
+  const seoIntelligence = {
+    topHashtags,
+    coreKeywords,
+    formatStats: {
+      totalVideos: processedVideos.length,
+      shortsCount,
+      longCount,
+      avgShortsViews,
+      avgLongViews,
+      shortsPercent: Math.round((shortsCount / (processedVideos.length || 1)) * 100),
+      recommendation: formatRecommendation
+    }
+  };
+
   return {
     keyword,
     regionCode,
@@ -919,13 +964,88 @@ async function performNicheAnalysis(keyword, regionCode, apiKey) {
     contentGaps,
     publishWindows,
     competitors: processedVideos,
+    seoIntelligence,
     stats: {
       totalAnalyzed: processedVideos.length,
       averageViews: avgViews,
       breakoutVideosCount: breakoutCount,
-      smallChannelsCount: smallChannelCount
+      smallChannelsCount: smallChannelCount,
+      shortsCount,
+      longCount
     }
   };
+}
+
+// ---------------------------------------------------------
+// Helper utilities: Duration, Hashtags, Keywords & Shorts
+// ---------------------------------------------------------
+function parseDurationSec(str) {
+  if (!str) return null;
+  const s = str.trim().toLowerCase();
+  if (s.includes('short')) return 45;
+  const parts = s.split(':').map(n => parseInt(n, 10));
+  if (parts.some(isNaN)) return null;
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return null;
+}
+
+function parseIsoDurationSec(isoStr) {
+  if (!isoStr) return null;
+  const match = isoStr.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return null;
+  const hours = parseInt(match[1] || '0', 10);
+  const mins = parseInt(match[2] || '0', 10);
+  const secs = parseInt(match[3] || '0', 10);
+  return hours * 3600 + mins * 60 + secs;
+}
+
+function formatDuration(sec) {
+  if (!sec || isNaN(sec)) return "";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function extractHashtags(text) {
+  if (!text) return [];
+  const matches = text.match(/#[a-zA-Z0-9_\u00C0-\u024F]+/g);
+  return matches ? Array.from(new Set(matches.map(m => m.toLowerCase()))) : [];
+}
+
+const STOPWORDS = new Set([
+  "của", "và", "là", "cho", "ở", "trong", "được", "với", "các", "những", "một", "này", "khi",
+  "đã", "đang", "sẽ", "để", "ra", "vào", "từ", "hay", "lại", "có", "không", "thì", "mà", "như",
+  "bạn", "tôi", "anh", "em", "người", "video", "clip", "full", "review", "hd", "tap", "tập",
+  "the", "and", "is", "for", "with", "to", "in", "of", "a", "an", "on", "at", "by", "from",
+  "this", "that", "it", "how", "what", "why", "top", "best", "vs"
+]);
+
+function extractKeywords(texts, currentKeyword) {
+  const wordFreq = {};
+  for (const text of texts) {
+    if (!text) continue;
+    const clean = text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ');
+    const words = clean.split(/\s+/).filter(w => w.length >= 2 && !STOPWORDS.has(w));
+
+    for (const w of words) {
+      wordFreq[w] = (wordFreq[w] || 0) + 1;
+    }
+
+    for (let i = 0; i < words.length - 1; i++) {
+      const phrase = `${words[i]} ${words[i + 1]}`;
+      wordFreq[phrase] = (wordFreq[phrase] || 0) + 1.5;
+    }
+  }
+
+  return Object.entries(wordFreq)
+    .filter(([phrase, count]) => count >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([keyword, count]) => ({
+      keyword,
+      frequency: Math.round(count)
+    }));
 }
 
 async function fetchLiveYouTubeSearch(keyword, regionCode) {
@@ -950,14 +1070,21 @@ async function fetchLiveYouTubeSearch(keyword, regionCode) {
   }
 
   const initialData = JSON.parse(match[1]);
-  const rawVideos = [];
+  const rawItems = [];
 
   function walk(obj) {
     if (!obj || typeof obj !== "object") return;
     if (obj.videoRenderer) {
       const v = obj.videoRenderer;
       if (v.videoId && v.title?.runs?.[0]?.text) {
-        rawVideos.push(v);
+        rawItems.push({ type: 'video', data: v });
+      }
+      return;
+    }
+    if (obj.reelItemRenderer) {
+      const r = obj.reelItemRenderer;
+      if (r.videoId) {
+        rawItems.push({ type: 'reel', data: r });
       }
       return;
     }
@@ -967,11 +1094,40 @@ async function fetchLiveYouTubeSearch(keyword, regionCode) {
   }
   walk(initialData);
 
-  if (rawVideos.length === 0) {
+  if (rawItems.length === 0) {
     throw new Error(`Không tìm thấy video nào cho từ khóa: "${keyword}"`);
   }
 
-  return rawVideos.slice(0, 25).map(v => {
+  return rawItems.slice(0, 28).map(item => {
+    if (item.type === 'reel') {
+      const r = item.data;
+      const vidId = r.videoId;
+      const title = r.headline?.simpleText || r.title?.simpleText || "YouTube Short";
+      const channelTitle = r.ownerText?.runs?.[0]?.text || "Creator Short";
+      const viewsRaw = r.viewCountText?.simpleText || "";
+      const views = parseViewsText(viewsRaw);
+      const hashtags = extractHashtags(title);
+
+      return {
+        id: vidId,
+        title,
+        channelTitle,
+        channelId: "",
+        publishedAt: new Date().toISOString(),
+        ageDays: 14,
+        publishedText: "Gần đây",
+        views: views || 15000,
+        subscribers: Math.max(3000, Math.round((views || 10000) * 0.3)),
+        thumbnail: r.thumbnail?.thumbnails?.slice(-1)[0]?.url || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
+        url: `https://www.youtube.com/shorts/${vidId}`,
+        isShort: true,
+        duration: "< 60s",
+        descriptionSnippet: "Đoạn video ngắn định dạng YouTube Shorts.",
+        hashtags: hashtags.length > 0 ? hashtags : ["#shorts", `#${keyword.toLowerCase().replace(/\s+/g, '')}`]
+      };
+    }
+
+    const v = item.data;
     const vidId = v.videoId;
     const title = v.title?.runs?.[0]?.text || "";
     const channelTitle = v.ownerText?.runs?.[0]?.text || "YouTube Creator";
@@ -984,6 +1140,37 @@ async function fetchLiveYouTubeSearch(keyword, regionCode) {
     const publishedAt = new Date(Date.now() - ageDays * 24 * 3600 * 1000).toISOString();
     
     const thumbUrl = v.thumbnail?.thumbnails?.slice(-1)[0]?.url || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`;
+
+    // Extract description snippet
+    let descriptionSnippet = "";
+    if (v.descriptionSnippet?.runs) {
+      descriptionSnippet = v.descriptionSnippet.runs.map(r => r.text || "").join("").trim();
+    } else if (v.detailedMetadataSnippets?.[0]?.snippetText?.runs) {
+      descriptionSnippet = v.detailedMetadataSnippets[0].snippetText.runs.map(r => r.text || "").join("").trim();
+    }
+
+    // Extract duration
+    let durationText = v.lengthText?.simpleText || "";
+    if (!durationText && Array.isArray(v.thumbnailOverlays)) {
+      for (const overlay of v.thumbnailOverlays) {
+        const timeText = overlay.thumbnailOverlayTimeStatusRenderer?.text?.simpleText;
+        if (timeText) {
+          durationText = timeText;
+          break;
+        }
+      }
+    }
+
+    const durSec = parseDurationSec(durationText);
+    const isShort = (durSec !== null && durSec <= 60) ||
+      title.toLowerCase().includes('#short') ||
+      descriptionSnippet.toLowerCase().includes('#short') ||
+      v.navigationEndpoint?.reelWatchEndpoint != null;
+
+    // Extract hashtags from title and description
+    const titleTags = extractHashtags(title);
+    const descTags = extractHashtags(descriptionSnippet);
+    const combinedTags = Array.from(new Set([...titleTags, ...descTags]));
 
     const isVerified = (v.ownerBadges || []).some(b => (b.metadataBadgeRenderer?.style || "").includes("VERIFIED"));
     let estimatedSubs = 15000;
@@ -1010,7 +1197,11 @@ async function fetchLiveYouTubeSearch(keyword, regionCode) {
       views: views || 1000,
       subscribers: estimatedSubs,
       thumbnail: thumbUrl,
-      url: `https://www.youtube.com/watch?v=${vidId}`
+      url: isShort ? `https://www.youtube.com/shorts/${vidId}` : `https://www.youtube.com/watch?v=${vidId}`,
+      isShort,
+      duration: durationText || (isShort ? "< 60s" : "Video dài"),
+      descriptionSnippet: descriptionSnippet || "Không có đoạn mô tả trích dẫn.",
+      hashtags: combinedTags
     };
   });
 }
@@ -1047,12 +1238,24 @@ async function fetchYouTubeDataViaAPI(keyword, regionCode, apiKey) {
     const vid = item.id.videoId;
     const vDetail = videoMap[vid] || {};
     const stats = vDetail.statistics || {};
+    const content = vDetail.contentDetails || {};
     const snippet = item.snippet;
     const chId = snippet.channelId;
     const views = parseInt(stats.viewCount || "0", 10);
     const subs = channelSubMap[chId] || 15000;
     const pubDate = new Date(snippet.publishedAt).getTime();
     const ageDays = Math.max((now - pubDate) / (1000 * 3600 * 24), 0.1);
+
+    const durSec = parseIsoDurationSec(content.duration);
+    const durationText = durSec ? formatDuration(durSec) : "";
+    const isShort = (durSec !== null && durSec <= 60) ||
+      snippet.title.toLowerCase().includes('#short') ||
+      (snippet.description || "").toLowerCase().includes('#short');
+
+    const descTags = extractHashtags(snippet.description || "");
+    const titleTags = extractHashtags(snippet.title || "");
+    const explicitTags = (vDetail.snippet?.tags || []).map(t => `#${t.toLowerCase().replace(/\s+/g, '')}`);
+    const combinedTags = Array.from(new Set([...titleTags, ...descTags, ...explicitTags.slice(0, 6)]));
 
     return {
       id: vid,
@@ -1065,7 +1268,12 @@ async function fetchYouTubeDataViaAPI(keyword, regionCode, apiKey) {
       views,
       subscribers: subs,
       thumbnail: snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url,
-      url: `https://www.youtube.com/watch?v=${vid}`
+      url: isShort ? `https://www.youtube.com/shorts/${vid}` : `https://www.youtube.com/watch?v=${vid}`,
+      isShort,
+      duration: durationText || (isShort ? "< 60s" : "Video dài"),
+      descriptionSnippet: (snippet.description || "").substring(0, 300) || "Không có đoạn mô tả.",
+      hashtags: combinedTags,
+      tags: vDetail.snippet?.tags || []
     };
   });
 }

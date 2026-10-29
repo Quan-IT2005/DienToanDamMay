@@ -52,7 +52,9 @@ import {
   Server,
   Database,
   Zap,
-  Settings
+  Settings,
+  Hash,
+  Copy
 } from 'lucide-react';
 
 ChartJS.register(
@@ -102,6 +104,9 @@ export default function App() {
   // Matrix Filter & Sort
   const [matrixSort, setMatrixSort] = useState('OUTLIER_DESC');
   const [matrixSearch, setMatrixSearch] = useState('');
+  const [formatFilter, setFormatFilter] = useState('ALL'); // 'ALL' | 'LONG' | 'SHORTS'
+  const [expandedDescId, setExpandedDescId] = useState(null);
+  const [copyFeedback, setCopyFeedback] = useState('');
 
   // Authentication & Account State
   const [authToken, setAuthToken] = useState(localStorage.getItem('tp_auth_token') || '');
@@ -557,16 +562,43 @@ export default function App() {
     window.open(`/api/export-strategy?keyword=${encodeURIComponent(result.keyword)}&regionCode=${result.regionCode}`, '_blank');
   };
 
+  // Copy Helpers
+  const handleCopyHashtags = (tags) => {
+    if (!tags || tags.length === 0) return;
+    const text = tags.join(' ');
+    navigator.clipboard.writeText(text);
+    setCopyFeedback('Đã sao chép bộ Hashtags vào clipboard!');
+    setTimeout(() => setCopyFeedback(''), 3000);
+  };
+
+  const handleCopyKeywords = (kws) => {
+    if (!kws || kws.length === 0) return;
+    const text = kws.map(k => k.keyword).join(', ');
+    navigator.clipboard.writeText(text);
+    setCopyFeedback('Đã sao chép bộ Từ Khóa SEO vào clipboard!');
+    setTimeout(() => setCopyFeedback(''), 3000);
+  };
+
   // Filtered & Sorted Competitors
   const processedCompetitors = useMemo(() => {
     if (!result?.competitors) return [];
     let list = [...result.competitors];
 
-    // Filter
+    // Format Filter (All vs Long-form vs Shorts)
+    if (formatFilter === 'SHORTS') {
+      list = list.filter((v) => v.isShort);
+    } else if (formatFilter === 'LONG') {
+      list = list.filter((v) => !v.isShort);
+    }
+
+    // Filter by search query (title, channel, or hashtag)
     if (matrixSearch.trim()) {
       const q = matrixSearch.toLowerCase();
       list = list.filter(
-        (v) => v.title.toLowerCase().includes(q) || v.channelTitle.toLowerCase().includes(q)
+        (v) =>
+          v.title.toLowerCase().includes(q) ||
+          v.channelTitle.toLowerCase().includes(q) ||
+          (v.hashtags || []).some(t => t.toLowerCase().includes(q))
       );
     }
 
@@ -580,7 +612,7 @@ export default function App() {
     });
 
     return list;
-  }, [result, matrixSearch, matrixSort]);
+  }, [result, matrixSearch, matrixSort, formatFilter]);
 
   // Quantum Radar Chart Setup
   const radarData = result ? {
@@ -850,6 +882,16 @@ export default function App() {
                 <Cpu size={15} />
               </div>
               {!sidebarCollapsed && <span>CONTENT GAPS</span>}
+            </div>
+
+            <div
+              className={`sidebar-menu-item ${activeTab === 'SEO' ? 'active' : ''}`}
+              onClick={() => setActiveTab('SEO')}
+            >
+              <div className="sidebar-icon text-theme">
+                <Hash size={15} />
+              </div>
+              {!sidebarCollapsed && <span>SEO & HASHTAGS</span>}
             </div>
 
             <div className="sidebar-header">{!sidebarCollapsed && 'TÀI KHOẢN & LỊCH SỬ'}</div>
@@ -1490,7 +1532,7 @@ export default function App() {
           {/* ===================================================================
               MAIN DASHBOARD VIEW (ACTIVE TAB === 'DASHBOARD' OR OTHER CORE TABS)
               =================================================================== */}
-          {(activeTab === 'DASHBOARD' || activeTab === 'SWIPE' || activeTab === 'RADAR' || activeTab === 'GAPS') && result && !loading && (
+          {(activeTab === 'DASHBOARD' || activeTab === 'SWIPE' || activeTab === 'RADAR' || activeTab === 'GAPS' || activeTab === 'SEO') && result && !loading && (
             <div className="quantum-dashboard">
               {/* TOP HEADER CONTROLS (BOOKMARK & EXPORT) */}
               <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2 p-2" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--bs-border-subtle)' }}>
@@ -1730,6 +1772,143 @@ export default function App() {
               )}
 
               {/* ===================================================================
+                  SEO & HASHTAG MATRIX SECTION
+                  =================================================================== */}
+              {(activeTab === 'DASHBOARD' || activeTab === 'SEO') && result?.seoIntelligence && (
+                <div className="card mb-2">
+                  <div className="card-header with-btn flex-wrap gap-2">
+                    <div className="d-flex align-items-center gap-2">
+                      <Hash size={14} className="text-theme" />
+                      <span>SEO & HASHTAG MATRIX — TỐI ƯU HÓA TỪ KHÓA & ĐỊNH DẠNG</span>
+                    </div>
+                    <div className="d-flex align-items-center gap-2">
+                      <button
+                        className="btn-quantum btn-quantum-sm"
+                        onClick={() => handleCopyHashtags((result.seoIntelligence.topHashtags || []).map(h => h.tag))}
+                      >
+                        <Copy size={11} /> COPY HASHTAGS
+                      </button>
+                      <button
+                        className="btn-quantum btn-quantum-sm btn-quantum-secondary"
+                        onClick={() => handleCopyKeywords(result.seoIntelligence.coreKeywords || [])}
+                      >
+                        <Copy size={11} /> COPY TỪ KHÓA SEO
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="card-body">
+                    {/* Shorts vs Long-Form Metrics */}
+                    <div className="row g-2 mb-3">
+                      <div className="col-12 col-md-6">
+                        <div className="format-metric-card p-2">
+                          <div className="d-flex justify-content-between align-items-center mb-1">
+                            <span className="fs-11px fw-bold text-warning d-flex align-items-center gap-1">
+                              <Zap size={12} /> YOUTUBE SHORTS (&lt; 60 GIÂY)
+                            </span>
+                            <span className="badge-quantum badge-warning fs-9px">
+                              {result.seoIntelligence.formatStats?.shortsPercent || 0}% NGÁCH
+                            </span>
+                          </div>
+                          <div className="fs-16px fw-bold text-white">
+                            {result.seoIntelligence.formatStats?.shortsCount || 0} / {result.stats?.totalAnalyzed || 25} Video
+                          </div>
+                          <div className="fs-9px text-muted mt-1">
+                            Lượt xem TB: <strong className="text-warning">~{(result.seoIntelligence.formatStats?.avgShortsViews || 0).toLocaleString()} views</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="col-12 col-md-6">
+                        <div className="format-metric-card p-2">
+                          <div className="d-flex justify-content-between align-items-center mb-1">
+                            <span className="fs-11px fw-bold text-theme d-flex align-items-center gap-1">
+                              🎬 VIDEO DÀI (LONG-FORM)
+                            </span>
+                            <span className="badge-quantum badge-theme fs-9px">
+                              {100 - (result.seoIntelligence.formatStats?.shortsPercent || 0)}% NGÁCH
+                            </span>
+                          </div>
+                          <div className="fs-16px fw-bold text-white">
+                            {result.seoIntelligence.formatStats?.longCount || 0} / {result.stats?.totalAnalyzed || 25} Video
+                          </div>
+                          <div className="fs-9px text-muted mt-1">
+                            Lượt xem TB: <strong className="text-theme">~{(result.seoIntelligence.formatStats?.avgLongViews || 0).toLocaleString()} views</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      {result.seoIntelligence.formatStats?.recommendation && (
+                        <div className="col-12">
+                          <div className="p-2 rounded" style={{ background: 'rgba(0, 255, 156, 0.04)', border: '1px solid rgba(0, 255, 156, 0.2)', fontSize: '11px', color: '#00ff9c' }}>
+                            💡 <strong>Gợi ý định dạng:</strong> {result.seoIntelligence.formatStats.recommendation}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="row g-2">
+                      {/* Hashtag Cloud */}
+                      <div className="col-12 col-lg-6">
+                        <div className="p-2 h-100" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--bs-border-subtle)' }}>
+                          <div className="d-flex justify-content-between align-items-center mb-2">
+                            <span className="fs-10px fw-bold text-white">TOP HASHTAGS THỊNH HÀNH ({result.seoIntelligence.topHashtags?.length || 0})</span>
+                            <span className="fs-9px text-muted">Bấm tag để lọc</span>
+                          </div>
+                          <div className="d-flex flex-wrap gap-1">
+                            {(result.seoIntelligence.topHashtags || []).map((item, idx) => (
+                              <button
+                                key={idx}
+                                className="hashtag-chip-btn"
+                                onClick={() => {
+                                  setMatrixSearch(item.tag);
+                                  if (activeTab === 'SEO') setActiveTab('SWIPE');
+                                }}
+                                title={`Xuất hiện trong ${item.count} video`}
+                              >
+                                <span>{item.tag}</span>
+                                <span className="badge-count">{item.count}</span>
+                              </button>
+                            ))}
+                            {(result.seoIntelligence.topHashtags || []).length === 0 && (
+                              <div className="text-muted fs-10px">Chưa có hashtag cố định trong các tiêu đề ngách.</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Core Keywords */}
+                      <div className="col-12 col-lg-6">
+                        <div className="p-2 h-100" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--bs-border-subtle)' }}>
+                          <div className="d-flex justify-content-between align-items-center mb-2">
+                            <span className="fs-10px fw-bold text-white">BỘ TỪ KHÓA SEO CỐT LÕI (CORE KEYWORDS)</span>
+                            <span className="fs-9px text-muted">Trích xuất từ tiêu đề & mô tả</span>
+                          </div>
+                          <div className="d-flex flex-wrap gap-1">
+                            {(result.seoIntelligence.coreKeywords || []).map((item, idx) => (
+                              <span
+                                key={idx}
+                                className="keyword-chip-pill"
+                                onClick={() => {
+                                  setMatrixSearch(item.keyword);
+                                  if (activeTab === 'SEO') setActiveTab('SWIPE');
+                                }}
+                                style={{ cursor: 'pointer' }}
+                                title={`Tần suất: ${item.frequency}`}
+                              >
+                                {item.keyword}
+                                <span className="text-muted ms-1 fs-8px">({item.frequency})</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ===================================================================
                   ROW 3: COMPETITOR SWIPE MATRIX (FILTER & SORT)
                   =================================================================== */}
               {(activeTab === 'DASHBOARD' || activeTab === 'SWIPE') && (
@@ -1746,7 +1925,7 @@ export default function App() {
                         <Filter size={11} className="text-muted me-1" />
                         <input
                           type="text"
-                          placeholder="Lọc video..."
+                          placeholder="Lọc video, tag..."
                           value={matrixSearch}
                           onChange={(e) => setMatrixSearch(e.target.value)}
                           style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '10px', outline: 'none', width: '100px' }}
@@ -1775,12 +1954,35 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* FORMAT SELECTOR PILLS */}
+                  <div className="d-flex align-items-center gap-2 px-3 py-2 border-bottom" style={{ background: 'rgba(255, 255, 255, 0.015)', borderColor: 'var(--bs-border-subtle)' }}>
+                    <span className="fs-9px text-muted fw-bold">ĐỊNH DẠNG:</span>
+                    <button
+                      className={`format-pill-btn ${formatFilter === 'ALL' ? 'active' : ''}`}
+                      onClick={() => setFormatFilter('ALL')}
+                    >
+                      TẤT CẢ ({(result.competitors || []).length})
+                    </button>
+                    <button
+                      className={`format-pill-btn ${formatFilter === 'LONG' ? 'active' : ''}`}
+                      onClick={() => setFormatFilter('LONG')}
+                    >
+                      🎬 VIDEO DÀI ({(result.competitors || []).filter(c => !c.isShort).length})
+                    </button>
+                    <button
+                      className={`format-pill-btn ${formatFilter === 'SHORTS' ? 'active' : ''}`}
+                      onClick={() => setFormatFilter('SHORTS')}
+                    >
+                      <Zap size={10} className="text-warning" /> YOUTUBE SHORTS ({(result.competitors || []).filter(c => c.isShort).length})
+                    </button>
+                  </div>
+
                   <div className="card-body p-0">
                     <div className="table-responsive">
                       <table className="quantum-table">
                         <thead>
                           <tr>
-                            <th style={{ width: '40%' }}>VIDEO TITLE & CHANNEL</th>
+                            <th style={{ width: '42%' }}>VIDEO TITLE & CHANNEL</th>
                             <th className="text-end">VIEWS</th>
                             <th className="text-end">EST. SUBS</th>
                             <th className="text-end">OUTLIER</th>
@@ -1792,19 +1994,41 @@ export default function App() {
                         <tbody>
                           {processedCompetitors.map((v) => {
                             const isHigh = v.outlierMultiplier >= 2.5;
+                            const isExpanded = expandedDescId === v.id;
                             return (
                               <tr key={v.id}>
                                 <td>
                                   <div className="table-video-cell">
-                                    <img
-                                      src={v.thumbnail}
-                                      alt={v.title}
-                                      className="table-video-thumb"
-                                      onError={(e) => {
-                                        e.target.src = 'https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=160&q=80';
-                                      }}
-                                    />
-                                    <div>
+                                    <div className="table-video-thumb-wrap">
+                                      <img
+                                        src={v.thumbnail}
+                                        alt={v.title}
+                                        className="table-video-thumb"
+                                        onError={(e) => {
+                                          e.target.src = 'https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=160&q=80';
+                                        }}
+                                      />
+                                      {v.isShort ? (
+                                        <span className="thumb-shorts-badge">
+                                          <Zap size={8} /> SHORTS
+                                        </span>
+                                      ) : (
+                                        v.duration && <span className="thumb-duration-badge">{v.duration}</span>
+                                      )}
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                      <div className="d-flex align-items-center gap-1 mb-1">
+                                        {v.isShort ? (
+                                          <span className="badge-quantum badge-warning fs-8px">
+                                            <Zap size={8} /> SHORTS
+                                          </span>
+                                        ) : (
+                                          <span className="badge-quantum badge-theme fs-8px">🎬 DÀI</span>
+                                        )}
+                                        {v.duration && !v.isShort && (
+                                          <span className="badge-quantum badge-secondary fs-8px">{v.duration}</span>
+                                        )}
+                                      </div>
                                       <a
                                         href={v.url}
                                         target="_blank"
@@ -1817,6 +2041,39 @@ export default function App() {
                                       <div className="fs-9px text-muted mt-1">
                                         <strong className="text-white">{v.channelTitle}</strong> • {v.publishedText || 'Gần đây'}
                                       </div>
+
+                                      {/* Hashtag Chips */}
+                                      {(v.hashtags || []).length > 0 && (
+                                        <div className="d-flex flex-wrap gap-1 mt-1">
+                                          {(v.hashtags || []).slice(0, 4).map((tag, tIdx) => (
+                                            <span
+                                              key={tIdx}
+                                              className="badge-quantum badge-secondary fs-8px"
+                                              style={{ cursor: 'pointer' }}
+                                              onClick={() => setMatrixSearch(tag)}
+                                              title="Lọc theo tag"
+                                            >
+                                              {tag}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+
+                                      {/* Description Expander Button */}
+                                      <button
+                                        type="button"
+                                        className="desc-toggle-btn"
+                                        onClick={() => setExpandedDescId(isExpanded ? null : v.id)}
+                                      >
+                                        {isExpanded ? '▲ Thu gọn mô tả (Description)' : '▼ Xem mô tả (Description snippet)'}
+                                      </button>
+
+                                      {/* Expandable Description Box */}
+                                      {isExpanded && (
+                                        <div className="video-desc-box mt-1">
+                                          {v.descriptionSnippet || 'Không có mô tả chi tiết.'}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 </td>
@@ -2043,6 +2300,14 @@ export default function App() {
               </form>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Copy Toast Feedback */}
+      {copyFeedback && (
+        <div className="copy-toast-banner">
+          <CheckCircle2 size={14} />
+          <span>{copyFeedback}</span>
         </div>
       )}
     </div>
